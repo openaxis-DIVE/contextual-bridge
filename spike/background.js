@@ -3,15 +3,36 @@
 const DEBUG = true;
 
 function log(...args) {
-  if (DEBUG) console.log('[Kagi Saver BG]', ...args);
+  if (DEBUG) {
+    const timestamp = new Date().toLocaleTimeString('en-US', { 
+      hour12: false, 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      second: '2-digit',
+      fractionalSecondDigits: 3
+    });
+    const message = `[${timestamp}] [Kagi Saver BG] ${args.join(' ')}`;
+    console.log(message);
+    
+    // Relay to content script
+    chrome.tabs.query({ url: 'https://kagi.com/*' }, (tabs) => {
+      tabs.forEach(tab => {
+        chrome.tabs.sendMessage(tab.id, { 
+          action: 'LOG_RELAY', 
+          source: 'BG',
+          args: args 
+        }).catch(() => {}); // Ignore errors if content not ready
+      });
+    });
+  }
 }
 
 class BackgroundController {
   constructor() {
     this.offscreenReady = false;
-    this.messageQueue = [];
     this.offscreenPath = 'offscreen.html';
     this._resolveOffscreenReady = null;
+    this._offscreenPromise = null;
     this.init();
   }
 
@@ -20,8 +41,12 @@ class BackgroundController {
     chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
   }
 
-  handleMessage(msg, sender, sendResponse) {
-    log('← Message:', msg.action || 'unknown', 'from', sender.tab ? 'content' : 'offscreen');
+handleMessage(msg, sender, sendResponse) {
+  // Relay offscreen logs to content
+  if (msg.action === 'LOG_RELAY_FROM_OFFSCREEN') {
+    log(`← From Offscreen:`, ...msg.args);
+    return false;
+  }
 
     // Offscreen announcing readiness
     if (msg.action === 'OFFSCREEN_READY') {
@@ -57,6 +82,17 @@ class BackgroundController {
       return;
     }
 
+    // If we're already waiting for offscreen to be ready, don't create it again
+    if (this._offscreenPromise) {
+      log('⏳ Waiting for existing offscreen...');
+      return this._offscreenPromise;
+    }
+
+    this._offscreenPromise = this._createOffscreen();
+    return this._offscreenPromise;
+  }
+
+  async _createOffscreen() {
     try {
       await chrome.offscreen.createDocument({
         url: this.offscreenPath,
@@ -64,8 +100,7 @@ class BackgroundController {
         justification: 'File System Access API'
       });
       log('✅ Offscreen document created, waiting for ready signal...');
-      
-      // Wait for OFFSCREEN_READY message
+
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('Offscreen readiness timeout'));
@@ -73,38 +108,27 @@ class BackgroundController {
 
         this._resolveOffscreenReady = () => {
           clearTimeout(timeout);
+          this.offscreenReady = true;
+          this._offscreenPromise = null;
           resolve();
         };
       });
     } catch (e) {
       if (e.message.includes('Only a single offscreen')) {
-        log('✅ Offscreen already exists, waiting for ready signal...');
-        // Offscreen exists but we may not have received OFFSCREEN_READY yet
-        if (this.offscreenReady) {
-          return;
-        }
-        
-        return new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            log('⚠️ Timeout waiting for ready, proceeding anyway');
-            this.offscreenReady = true;
-            resolve();
-          }, 3000);
-
-          this._resolveOffscreenReady = () => {
-            clearTimeout(timeout);
-            resolve();
-          };
-        });
+        log('✅ Offscreen already exists');
+        this.offscreenReady = true;
+        this._offscreenPromise = null;
+        return;
       }
+
       log('💥 Offscreen creation error:', e.message);
+      this._offscreenPromise = null;
       throw e;
     }
   }
 
   onOffscreenReady() {
     log('✅ Offscreen reports ready');
-    this.offscreenReady = true;
     if (this._resolveOffscreenReady) {
       this._resolveOffscreenReady();
     }

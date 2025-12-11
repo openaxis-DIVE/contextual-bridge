@@ -1,6 +1,6 @@
 // bannerManager.js
 
-export class BannerManager {
+class BannerManager {
   constructor() {
     this.currentBanner = null;
   }

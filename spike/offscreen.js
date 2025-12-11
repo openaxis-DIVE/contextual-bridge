@@ -3,10 +3,28 @@
 const DEBUG = true;
 
 function log(...args) {
-  if (DEBUG) console.log('[Kagi Saver Offscreen]', ...args);
+  if (DEBUG) {
+    const timestamp = new Date().toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      fractionalSecondDigits: 3
+    });
+    const message = `[${timestamp}] [Kagi Saver Offscreen] ${args.join(' ')}`;
+    console.log(message);
+
+    // Relay to background, which will relay to content
+    chrome.runtime.sendMessage({
+      action: 'LOG_RELAY_FROM_OFFSCREEN',
+      args: args
+    }).catch(() => {});
+  }
 }
 
-export class OffscreenHandler {
+log('📄 offscreen.js loaded');
+
+class OffscreenHandler {
   constructor() {
     this.dirHandle = null;
     this.init();
@@ -15,7 +33,6 @@ export class OffscreenHandler {
   init() {
     log('🚀 Offscreen handler initializing');
     chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
-    // Notify background that we're ready to receive messages
     this.notifyReady();
   }
 
@@ -40,10 +57,10 @@ export class OffscreenHandler {
         return { success: false, error: 'No directory selected' };
       }
 
-      const parts = filepath.replace(/\\\\/g, '/').split('/').filter(Boolean);
+      const parts = filepath.replace(/\\/g, '/').split('/').filter(Boolean);
       const filename = parts.pop();
-
       let cwd = dir;
+
       for (const part of parts) {
         cwd = await cwd.getDirectoryHandle(part, { create: true });
       }
@@ -91,7 +108,36 @@ export class OffscreenHandler {
     }
   }
 
-  notifyReady() {
-    chrome.runtime.sendMessage({ action: 'OFFSCREEN_READY' });
+  async notifyReady() {
+    const maxRetries = 5;
+    const retryDelay = 100;
+
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        log(`📢 Sending OFFSCREEN_READY (attempt ${i + 1}/${maxRetries})`);
+        
+        await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({ action: 'OFFSCREEN_READY' }, (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve(response);
+            }
+          });
+        });
+        
+        log('✅ OFFSCREEN_READY sent successfully');
+        return;
+      } catch (e) {
+        if (i < maxRetries - 1) {
+          log(`⏳ Retry ${i + 1}/${maxRetries} after ${retryDelay}ms...`, e.message);
+          await new Promise(r => setTimeout(r, retryDelay));
+        } else {
+          log('💥 Failed to send OFFSCREEN_READY after retries:', e.message);
+        }
+      }
+    }
   }
 }
+
+new OffscreenHandler();

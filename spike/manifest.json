@@ -2,12 +2,16 @@
   "manifest_version": 3,
   "name": "Kagi Saver",
   "version": "1.0",
-  "permissions": ["storage", "clipboardRead", "offscreen"],
+  "description": "Save clipboard content from Kagi to local filesystem",
+  "permissions": [
+    "storage",
+    "clipboardRead",
+    "offscreen"
+  ],
   "content_scripts": [
     {
       "matches": ["https://kagi.com/*"],
-      "js": ["content.js"],
-      "type": "module",
+      "js": ["bannerManager.js", "fileMarkerParser.js", "content.js"],
       "all_frames": true,
       "run_at": "document_end"
     }

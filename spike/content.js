@@ -1,79 +1,55 @@
 // content.js - Content script for clipboard monitoring
 
-import { BannerManager } from './bannerManager.js';
-
 const DEBUG = true;
 
 function log(...args) {
-  if (DEBUG) console.log('[Kagi Saver Content]', ...args);
+  if (DEBUG) {
+    const timestamp = new Date().toLocaleTimeString('en-US', { 
+      hour12: false, 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      second: '2-digit',
+      fractionalSecondDigits: 3
+    });
+    console.log(`[${timestamp}] [Kagi Saver Content]`, ...args);
+  }
 }
+
+// Listen for relay messages from background
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'LOG_RELAY') {
+    log(`← From ${msg.source}:`, ...msg.args);
+  }
+});
 
 const bannerManager = new BannerManager();
-
-class FileMarkerParser {
-  constructor() {
-    this.patterns = [
-      { name: 'json', regex: /\{\s*"\$file"\s*:\s*"([^"]+)"/ },
-      { name: 'comment', regex: /^[\s\/\*\#\[\<\-'"`]*\s*(.+?)\s*$/ }
-    ];
-  }
-
-  parse(text) {
-    if (!text || text.length === 0) return null;
-
-    const firstLine = text.trimStart().split('\n')[0];
-    const filepath = this.extractPath(firstLine);
-
-    if (!filepath || !this.isValidPath(filepath)) {
-      log('❌ Invalid path:', filepath);
-      return null;
-    }
-
-    const content = text.split('\n').slice(1).join('\n').trim();
-    if (!content) {
-      log('❌ No content after marker');
-      return null;
-    }
-
-    log('✅ Parsed:', filepath);
-    return { filepath, content };
-  }
-
-  extractPath(line) {
-    for (const pattern of this.patterns) {
-      const match = line.match(pattern.regex);
-      if (match?.[1]) {
-        return match[1];
-      }
-    }
-    return null;
-  }
-
-  isValidPath(path) {
-    return /\.\w+$|[\/\\]/.test(path);
-  }
-}
+const parser = new FileMarkerParser();
 
 class ClipboardWatcher {
   constructor() {
     this.lastClipboard = '';
-    this.parser = new FileMarkerParser();
     this.init();
   }
 
   init() {
     log('🚀 Clipboard watcher initializing');
     document.addEventListener('copy', this.onCopy.bind(this));
-    document.addEventListener('click', this.onClick.bind(this));
+    document.addEventListener('mouseup', this.onMouseUp.bind(this));
     bannerManager.show('🔖 Kagi Saver active', 3000);
   }
 
   onCopy() {
+    // Clipboard might not be ready immediately after copy event
     setTimeout(this.checkClipboard.bind(this, 'copy'), 100);
   }
 
-  onClick() {
-    setTimeout(this.checkClipboard.bind(this, 'click'), 500);
+  onMouseUp(event) {
+    // Only check on interactive elements (avoid text selection clicks)
+    const target = event.target;
+    if (target.matches('a, button, img, [role="button"]')) {
+      // No timeout needed for mouseup - it fires after interaction completes
+      this.checkClipboard('mouseup');
+    }
   }
 
   async checkClipboard(source) {
@@ -87,7 +63,7 @@ class ClipboardWatcher {
       log(`--- Clipboard changed (${source}) ---`);
       this.lastClipboard = text;
 
-      const parsed = this.parser.parse(text);
+      const parsed = parser.parse(text);
       if (!parsed) return;
 
       const filename = parsed.filepath.split(/[\/\\]/).pop();
