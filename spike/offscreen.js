@@ -1,78 +1,97 @@
-// offscreen.js
+// offscreen.js - Offscreen document handler for File System Access
+
 const DEBUG = true;
 
 function log(...args) {
   if (DEBUG) console.log('[Kagi Saver Offscreen]', ...args);
 }
 
-let dirHandle = null;
-
-async function pickDir() {
-  log('🔥 SHOWING PICKER');
-  try {
-    dirHandle = await window.showDirectoryPicker({ 
-      mode: 'readwrite', 
-      startIn: 'downloads' 
-    });
-    log('📁 Directory cached:', dirHandle.name);
-    return dirHandle;
-  } catch (e) {
-    log('❌ Picker cancelled:', e.name);
-    return null;
+export class OffscreenHandler {
+  constructor() {
+    this.dirHandle = null;
+    this.init();
   }
-}
 
-async function getDir() {
-  if (dirHandle) {
+  init() {
+    log('🚀 Offscreen handler initializing');
+    chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
+    // Notify background that we're ready to receive messages
+    this.notifyReady();
+  }
+
+  handleMessage(msg, sender, sendResponse) {
+    log('← Message:', msg.action || 'unknown');
+
+    if (msg.action === 'saveFile') {
+      this.saveFile(msg.filepath, msg.content)
+        .then(sendResponse)
+        .catch(e => sendResponse({ success: false, error: e.message }));
+      return true; // async
+    }
+
+    return false;
+  }
+
+  async saveFile(filepath, content) {
+    log('💾 SAVE REQUEST:', filepath);
     try {
-      await dirHandle.queryPermission({ mode: 'readwrite' });
-      return dirHandle;
-    } catch {
-      log('📁 Cache stale - repicking');
-      return await pickDir();
+      const dir = await this.getDir();
+      if (!dir) {
+        return { success: false, error: 'No directory selected' };
+      }
+
+      const parts = filepath.replace(/\\\\/g, '/').split('/').filter(Boolean);
+      const filename = parts.pop();
+
+      let cwd = dir;
+      for (const part of parts) {
+        cwd = await cwd.getDirectoryHandle(part, { create: true });
+      }
+
+      const fileHandle = await cwd.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+
+      log('✅ SAVED:', filepath);
+      return { success: true };
+    } catch (e) {
+      log('💥 Save error:', e.message);
+      return { success: false, error: e.message };
     }
   }
-  return await pickDir();
-}
 
-async function saveFile(path, content) {
-  log('💾 SAVE', path);
-  
-  const dir = await getDir();
-  if (!dir) return { success: false, error: 'No directory selected' };
-  
-  try {
-    const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
-    const name = parts.pop();
-    let cwd = dir;
-    
-    for (let part of parts) {
-      cwd = await cwd.getDirectoryHandle(part, { create: true });
+  async getDir() {
+    if (this.dirHandle) {
+      try {
+        await this.dirHandle.queryPermission({ mode: 'readwrite' });
+        log('📁 Using cached directory');
+        return this.dirHandle;
+      } catch (e) {
+        log('📁 Cache stale, repicking');
+        this.dirHandle = null;
+      }
     }
-    
-    const handle = await cwd.getFileHandle(name, { create: true });
-    const write = await handle.createWritable();
-    await write.write(content);
-    await write.close();
-    
-    log('✅ SAVED', path);
-    return { success: true };
-  } catch (e) {
-    log('💥 ERROR', e.message);
-    return { success: false, error: e.message };
+
+    return await this.pickDir();
+  }
+
+  async pickDir() {
+    log('🔥 SHOWING PICKER');
+    try {
+      this.dirHandle = await window.showDirectoryPicker({
+        mode: 'readwrite',
+        startIn: 'downloads'
+      });
+      log('📁 Directory selected:', this.dirHandle.name);
+      return this.dirHandle;
+    } catch (e) {
+      log('❌ Picker cancelled or error:', e.name);
+      return null;
+    }
+  }
+
+  notifyReady() {
+    chrome.runtime.sendMessage({ action: 'OFFSCREEN_READY' });
   }
 }
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  log('←', msg.action || msg.ping ? 'PING' : 'UNKNOWN');
-  
-  if (msg.ping) {
-    sendResponse({ pong: true });
-    return;
-  }
-  
-  if (msg.action === 'saveFile') {
-    saveFile(msg.filepath, msg.content).then(sendResponse);
-    return true;
-  }
-});

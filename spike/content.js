@@ -1,137 +1,69 @@
-(function() {
-  'use strict';
-  
-  const DEBUG = true;
-  let lastClipboard = '';
-  
-  function log(...args) {
-    if (DEBUG) console.log('[Kagi Saver]', ...args);
+class ClipboardWatcher {
+  constructor() {
+    this.lastClipboard = '';
+    this.parser = new FileMarkerParser();
+    this.init();
   }
-  
-  function showBanner(msg, duration = 8000) {
-    const container = document.createElement('div');
-    const shadow = container.attachShadow({ mode: 'closed' });
-    shadow.innerHTML = `
-      <style>
-        .banner {
-          position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-          background: #2d2d2d; color: #fff; padding: 12px 24px;
-          border-radius: 6px; z-index: 999999;
-          font-family: system-ui; font-size: 14px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-          animation: fadeInOut 8s forwards;
-        }
-        @keyframes fadeInOut {
-          0%, 85% { opacity: 1; }
-          100% { opacity: 0; }
-        }
-      </style>
-      <div class="banner">${msg}</div>
-    `;
-    document.body.appendChild(container);
-    setTimeout(() => container.remove(), duration);
+
+  init() {
+    document.addEventListener('copy', this.onCopy.bind(this));
+    document.addEventListener('click', this.onClick.bind(this));
   }
-  
-  async function parseClipboard(text) {
-    log('🔥 PARSE INPUT:', text.split('\n')[0]);
+
+  onCopy() {
+    setTimeout(this.checkClipboard.bind(this, 'copy'), 100);
+  }
+
+  async checkClipboard(source) {
+    const text = await navigator.clipboard.readText();
+    if (text === this.lastClipboard) return;
     
-    const firstLine = text.trimStart().split('\n')[0];
-    if (!firstLine) return null;
+    this.lastClipboard = text;
+    const parsed = this.parser.parse(text);
     
-    log('🔥 FIRST LINE AFTER TRIM:', firstLine);
-    
-    let filepath;
-    
-    const jsonMatch = firstLine.match(/\{\s*"\$file"\s*:\s*"([^"]+)"/);
-    if (jsonMatch) {
-      filepath = jsonMatch[1];
+    if (parsed) {
+      this.saveViaBackground(parsed);
+    }
+  }
+
+  saveViaBackground(parsed) {
+    chrome.runtime.sendMessage(
+      { action: 'saveFile', ...parsed },
+      this.onSaveResponse.bind(this, parsed)
+    );
+  }
+
+  onSaveResponse(parsed, response) {
+    if (response?.success) {
+      showBanner(`✅ Saved: ${parsed.filename}`);
     } else {
-      const match = firstLine.match(/^[\s\/\*\#\[\<\-'"`]*\s*(.+?)\s*$/);
-      if (!match) {
-        log('🔥 NO REGEX MATCH');
-        return null;
-      }
-      filepath = match[1];
+      showBanner(`❌ Failed`);
     }
+  }
+}
+
+class FileMarkerParser {
+  parse(text) {
+    const firstLine = text.trimStart().split('\n')[0];
+    const filepath = this.extractPath(firstLine);
     
-    filepath = filepath.trim();
-    log('🔥 EXTRACTED PATH:', filepath);
-    
-    if (!filepath.includes('.') && !filepath.includes('/') && !filepath.includes('\\')) {
-      log('🔥 INVALID PATH - no . / \\');
-      return null;
-    }
+    if (!filepath || !this.isValidPath(filepath)) return null;
     
     const content = text.split('\n').slice(1).join('\n').trim();
-    if (!content) {
-      log('🔥 NO CONTENT');
-      return null;
-    }
-    
-    log('✅ PARSED SUCCESS');
-    return { filepath, content };
+    return content ? { filepath, content } : null;
   }
-  
-  async function checkClipboard(source) {
-    try {
-      const text = await navigator.clipboard.readText();
-      
-      if (text !== lastClipboard && text.length > 0) {
-        log(`--- CLIPBOARD CHANGED (${source}) ---`);
-        log(text);
-        log('--- END CLIPBOARD ---');
-        
-        lastClipboard = text;
-        
-        const parsed = await parseClipboard(text);
-        if (parsed) {
-          log('Parsed file save request:', parsed.filepath);
-          showBanner(`📋 Detected: ${parsed.filepath.split(/[/\\]/).pop()}`);
-          
-          chrome.runtime.sendMessage({
-            action: 'saveFile',
-            filepath: parsed.filepath,
-            content: parsed.content
-          }, (response) => {
-            if (chrome.runtime.lastError) {
-              log('❌ Runtime error:', chrome.runtime.lastError.message);
-              showBanner(`❌ Extension error`);
-              return;
-            }
-            
-            if (response?.success) {
-              showBanner(`✅ Saved: ${parsed.filepath.split(/[/\\]/).pop()}`);
-            } else {
-              log('❌ Save failed:', response?.error);
-              showBanner(`❌ Save failed`);
-            }
-          });
-        }
-      }
-    } catch (err) {
-      if (err.name !== 'NotAllowedError') {
-        log('Clipboard error:', err.message);
-      }
-    }
-  }
-  
-  function init() {
-    log('Initializing...');
+
+  extractPath(line) {
+    const jsonMatch = line.match(/\{\s*"\$file"\s*:\s*"([^"]+)"/);
+    if (jsonMatch) return jsonMatch[1];
     
-    document.addEventListener('copy', () => {
-      setTimeout(() => checkClipboard('copy event'), 100);
-    });
-    
-    document.addEventListener('click', () => {
-      setTimeout(() => checkClipboard('click'), 500);
-    });
-    
-    showBanner('Kagi Saver active');
+    const commentMatch = line.match(/^[\s\/\*\#\[\<\-'"\`]*\s*(.+?)\s*$/);
+    return commentMatch?.[1];
   }
-  
-  if (document.body) {
-    init();
-  } else {
-    document.addEventListener('DOMContentLoaded', init);
+
+  isValidPath(path) {
+    return path.includes('.') || path.includes('/') || path.includes('\\');
   }
-})();
+}
+
+new ClipboardWatcher();
