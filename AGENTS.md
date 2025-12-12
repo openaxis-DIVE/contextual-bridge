@@ -1,60 +1,125 @@
-# AGENTS.md
+# Generic Coding Style Prompts
 
-## How agents should use this repo
+## Handler Map Pattern (Object Lookup vs Switch)
 
-- Read `README.md` first to understand project purpose, goals, and architecture
-- Read `ROADMAP.md` to know current work, blockers, and next steps
-- When significant design or workflow changes are introduced, add a short note here and update `ROADMAP.md`
+### When to Use
 
-## For AI agents reading this
+**Use Object Lookup (Handler Maps) when:**
+- Handler set will grow over time (Phase 1/2 development, extensible systems)
+- Team values maintainability over micro-optimizations
+- You need to inject/mock handlers for testing
+- Handlers may need dynamic composition at runtime
+- Handler count is <100 (negligible performance difference)
+- You hate switch statements (subjective but valid!)
 
-When working on this project, identify which **platform** you are running on and read the corresponding guidance file:
-- If you are on **Perplexity (PERP)**, read `PERP.md`
-- If you are on **Kagi (KAGI)**, read `KAGI.md`
-- If you are on **GitHub (GITHUB)**, read `GITHUB.md`
-- If you are on **VSCode (COPILOT)**, read `COPILOT.md`
+**Use Switch when:**
+- Performance is critical (tight loops, thousands of invocations/second)
+- Handler set is fixed and small (<5 cases)
+- Memory allocation must be minimized
+- Code is shipped and frozen (no new actions expected)
 
-If you are unclear which platform you are on, please ask the human owner. We can then add platform awareness to your system prompt/directives so future sessions know automatically.
+### The Pattern
 
-This ensures you're following the patterns and constraints specific to your platform and capabilities.
+**Handler Map (Recommended for Extensions):**
+```javascript
+const messageHandlers = {
+  'SAVE_FILE': handleSaveFile,
+  'LOAD_FILE': handleLoadFile,
+  'PICK_DIRECTORY': handlePickDirectory,
+  'LOG_RELAY_FROM_OFFSCREEN': handleLogRelay
+};
 
-## Core project files
+function handleUnknownAction(action, payload, sender, sendResponse) {
+  log('⚠️ Unknown action:', action);
+  sendResponse({ error: `Unknown action: ${action}` });
+}
 
-Always reference these three files for project context:
-- [README.md](https://github.com/openaxis-DIVE/contextual-bridge/blob/main/README.md) - Project overview, goals, architecture
-- [ROADMAP.md](https://github.com/openaxis-DIVE/contextual-bridge/blob/main/ROADMAP.md) - Current work, blockers, next steps
-- [AGENTS.md](https://github.com/openaxis-DIVE/contextual-bridge/blob/main/AGENTS.md) - This file; agent-specific guidance
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const { action, payload } = message;
+  const handler = messageHandlers[action] || handleUnknownAction;
+  handler(payload, sender, sendResponse);
+  return true;
+});
+```
 
-## Conventions
+**Switch (When Necessary):**
+```javascript
+switch (action) {
+  case 'SAVE_FILE':
+    handleSaveFile(payload, sender, sendResponse);
+    break;
+  case 'LOAD_FILE':
+    handleLoadFile(payload, sender, sendResponse);
+    break;
+  default:
+    handleUnknownAction(action, payload, sender, sendResponse);
+}
+```
 
-- Keep this repo small and focused; prefer features that improve the core bridge
-- Document new workflows or patterns here when they affect how agents should behave
-- Prefer clear, explicit names over clever abstractions
-- When adding new capabilities, update `README.md` and `ROADMAP.md`
+### Trade-offs
 
-## Documentation rhythm
+| Aspect | Handler Map | Switch |
+|--------|-------------|--------|
+| **Performance** | ~20-30% slower (negligible in practice) | Baseline |
+| **Extensibility** | Add handlers without touching router | Requires code change |
+| **Readability** | All handlers visible in one place | Clear fallthrough logic visible |
+| **Testing** | Can inject/mock handlers | Must mock entire function |
+| **Memory** | Allocates object | Stack allocation only |
+| **Boilerplate** | Clean, no break statements | Repetitive case/break |
 
-- **End of coding session**: Move completed items from "Current Focus" to "Recently Completed" in `ROADMAP.md`
-- **After architectural decisions**: Add notes to `REFACTOR_PLAN.md` or platform-specific file
-- **When completing phases**: Update phase status in refactor documentation
+### Chrome Extension Context
 
-## Agent-specific guidance
+For Chrome extensions, message routing is **NOT a performance bottleneck** because:
+- Message frequency is user-driven (not thousands/sec)
+- Processing time dominated by I/O (file access, network)
+- Browser's JIT compiler optimizes both patterns equally
 
-For platform-specific directives and optimal usage patterns, see the platform-specific files listed above in "For AI agents reading this".
+**Recommendation:** Use handler maps for all extension routing unless profiling proves otherwise.
 
-## File markers for AI-assisted output
+### Example: Refactoring Switch to Handler Map
 
-When generating or editing files, include a filepath marker on the first line using the appropriate comment syntax for that file type:
+**Before:**
+```javascript
+switch (action) {
+  case 'saveFile':
+    handleSaveFile_Legacy(payload, sendResponse);
+    break;
+  case 'OPEN_MODAL':
+    handleOpenModal(sender, sendResponse);
+    break;
+  case 'CLOSE_MODAL':
+    handleCloseModal(sender, sendResponse);
+    break;
+  default:
+    log('⚠️ Unknown action:', action);
+    sendResponse({ error: `Unknown action: ${action}` });
+}
+```
 
-**Format:** `comment-open + filepath + optional description + comment-close (if single-line)`
+**After:**
+```javascript
+const messageHandlers = {
+  'saveFile': handleSaveFile_Legacy,
+  'OPEN_MODAL': handleOpenModal,
+  'CLOSE_MODAL': handleCloseModal
+};
 
-**Examples:**
-- Markdown: `# README.md (project overview)`
-- JavaScript: `// tests/AGENTS.md`
-- XML: `<!-- deployment/config.xml - Configuration for deployment -->`
-- Multi-line: 
-  /* REFACTOR_PLAN.md
-     Detailed implementation plan for keyboard-driven refactor
-  */
+const handler = messageHandlers[action] || handleUnknownAction;
+handler(payload, sender, sendResponse);
+```
 
-The filename/path is essential; descriptive text after it is optional. This convention enables AI agents to route clipboard output directly to the correct file.
+### Handler Signature Consistency
+
+When using handler maps, enforce a consistent signature:
+
+```javascript
+// Good: All handlers have same signature
+function handleSaveFile(payload, sender, sendResponse) { }
+function handleLoadFile(payload, sender, sendResponse) { }
+
+// Bad: Inconsistent signatures
+function handleSaveFile(payload, sendResponse) { }      // Missing sender
+function handleLoadFile(payload, sender, sendResponse) { } // Has sender
+```
+
+This makes the handler map work seamlessly without special cases.
