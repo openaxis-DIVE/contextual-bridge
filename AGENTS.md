@@ -18,6 +18,13 @@ If you are unclear which platform you are on, please ask the human owner. We can
 
 This ensures you're following the patterns and constraints specific to your platform and capabilities.
 
+## Core project files
+
+Always reference these three files for project context:
+- [README.md](https://github.com/openaxis-DIVE/contextual-bridge/blob/main/README.md) - Project overview, goals, architecture
+- [ROADMAP.md](https://github.com/openaxis-DIVE/contextual-bridge/blob/main/ROADMAP.md) - Current work, blockers, next steps
+- [AGENTS.md](https://github.com/openaxis-DIVE/contextual-bridge/blob/main/AGENTS.md) - This file; agent-specific guidance
+
 ## Conventions
 
 - Keep this repo small and focused; prefer features that improve the core bridge

@@ -33,3 +33,15 @@ When deep research or non‑obvious architectural choices are made with PERP's h
 - For larger research efforts:
   - Create a markdown file under a future `research-snapshots/` directory.
   - Add a short entry here linking to that snapshot and its implementation status.
+
+## Context management
+
+Long conversations can accumulate context debt. Watch for:
+- Conversation length > 30 exchanges without a natural checkpoint
+- Topic drift from original task (e.g., started with refactor, now discussing deployment)
+- Repeated context (re-explaining same concepts multiple times)
+- Setup/decision fatigue (many minor decisions that could be documented instead)
+
+**When you notice bloat**, suggest: "Should we checkpoint here and start a fresh thread for [next task]?"
+
+A fresh thread with clear context (linked files, specific task) is often cleaner than a 60-exchange monolith.
