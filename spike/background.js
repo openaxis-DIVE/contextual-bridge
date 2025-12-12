@@ -4,10 +4,10 @@ const DEBUG = true;
 
 function log(...args) {
   if (DEBUG) {
-    const timestamp = new Date().toLocaleTimeString('en-US', { 
-      hour12: false, 
-      hour: '2-digit', 
-      minute: '2-digit', 
+    const timestamp = new Date().toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
       second: '2-digit',
       fractionalSecondDigits: 3
     });
@@ -45,11 +45,13 @@ async function ensureOffscreen() {
     // Create offscreen document
     await chrome.offscreen.createDocument({
       url: offscreenPath,
-      reasons: ['FILE_SYSTEM_ACCESS']
+      reasons: ['DOM_PARSER'],
+      justification: 'File System Access API'
     });
 
     offscreenReady = true;
     log('✅ Offscreen document created');
+
   } catch (error) {
     log('❌ Offscreen creation error:', error.message);
     offscreenReady = false;
@@ -66,58 +68,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ============================================================================
-// Message Routing (Phase 1 - KeyHandler Integration)
+// Message Handlers (Handler Map)
+// ============================================================================
+
+const messageHandlers = {
+  // Legacy action (backward compatibility)
+  'saveFile': handleSaveFile_Legacy,
+
+  // Phase 1: KeyHandler actions
+  'OPEN_MODAL': handleOpenModal,
+  'CLOSE_MODAL': handleCloseModal,
+  'SAVE_FILE': handleSaveFile,
+  'LOAD_FILE': handleLoadFile,
+  'PICK_DIRECTORY': handlePickDirectory,
+  'LOG_RELAY_FROM_OFFSCREEN': handleLogRelay
+};
+
+/**
+ * Default handler for unknown actions
+ * @param {string} action - The action name
+ * @param {*} payload - The message payload
+ * @param {object} sender - The message sender
+ * @param {function} sendResponse - Response callback
+ */
+function handleUnknownAction(action, payload, sender, sendResponse) {
+  log('⚠️ Unknown action:', action);
+  sendResponse({ error: `Unknown action: ${action}` });
+}
+
+// ============================================================================
+// Message Routing (Object Lookup Pattern)
 // ============================================================================
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const { action, payload } = message;
-
   log(`📨 Received: ${action}`, payload);
 
-  switch (action) {
-    // Legacy action (backward compatibility)
-    case 'saveFile':
-      handleSaveFile_Legacy(payload, sendResponse);
-      break;
-
-    // Phase 1: KeyHandler actions
-    case 'OPEN_MODAL':
-      handleOpenModal(sender, sendResponse);
-      break;
-
-    case 'CLOSE_MODAL':
-      handleCloseModal(sender, sendResponse);
-      break;
-
-    case 'SAVE_FILE':
-      handleSaveFile(payload, sender, sendResponse);
-      break;
-
-    case 'LOAD_FILE':
-      handleLoadFile(payload, sender, sendResponse);
-      break;
-
-    case 'PICK_DIRECTORY':
-      handlePickDirectory(payload, sender, sendResponse);
-      break;
-
-    default:
-      log('⚠️  Unknown action:', action);
-      sendResponse({ error: `Unknown action: ${action}` });
-  }
+  // Look up handler or use default
+  const handler = messageHandlers[action] || handleUnknownAction;
+  
+  // Call handler with correct signature (action, payload, sender, sendResponse)
+  handler(action, payload, sender, sendResponse);
 
   // Return true to indicate async response
   return true;
 });
 
 // ============================================================================
-// Legacy Handler (backward compatibility with ClipboardWatcher)
+// Handler Functions
 // ============================================================================
 
-function handleSaveFile_Legacy(payload, sendResponse) {
+/**
+ * Legacy: Save file via offscreen document
+ */
+function handleSaveFile_Legacy(action, payload, sender, sendResponse) {
   const { filepath, content } = payload;
   const filename = filepath.split(/[\/\\]/).pop();
-
   log(`💾 Save file (legacy): ${filename}`);
 
   ensureOffscreen().then(() => {
@@ -143,57 +149,69 @@ function handleSaveFile_Legacy(payload, sendResponse) {
   });
 }
 
-// ============================================================================
-// Phase 1 Handlers (KeyHandler Integration)
-// ============================================================================
-
-function handleOpenModal(sender, sendResponse) {
+/**
+ * Phase 1: Open modal
+ */
+function handleOpenModal(action, payload, sender, sendResponse) {
   log('🎯 Opening modal');
   // TODO: Phase 1 continuation - implement modal state management
   sendResponse({ success: true });
 }
 
-function handleCloseModal(sender, sendResponse) {
+/**
+ * Phase 1: Close modal
+ */
+function handleCloseModal(action, payload, sender, sendResponse) {
   log('🎯 Closing modal');
   // TODO: Phase 1 continuation - implement modal state management
   sendResponse({ success: true });
 }
 
-function handleSaveFile(payload, sender, sendResponse) {
+/**
+ * Phase 1: Save file from KeyHandler
+ */
+function handleSaveFile(action, payload, sender, sendResponse) {
   const { content } = payload;
-
   log(`💾 Save file (KeyHandler): ${content.length} bytes`);
-
   // TODO: Phase 1 continuation - extract filepath from content
-  // For now, placeholder response
   sendResponse({
     success: false,
     error: 'Not implemented yet - waiting for Phase 1 DirectoryManager'
   });
 }
 
-function handleLoadFile(payload, sender, sendResponse) {
+/**
+ * Phase 1: Load file from KeyHandler
+ */
+function handleLoadFile(action, payload, sender, sendResponse) {
   const { selectedText } = payload;
-
   log(`📂 Load file (KeyHandler): ${selectedText || 'no selection'}`);
-
   // TODO: Phase 1 continuation - load from directory
-  // For now, placeholder response
   sendResponse({
     success: false,
     error: 'Not implemented yet - waiting for Phase 1 DirectoryManager'
   });
 }
 
-function handlePickDirectory(payload, sender, sendResponse) {
+/**
+ * Phase 1: Pick working directory
+ */
+function handlePickDirectory(action, payload, sender, sendResponse) {
   log('📁 Pick directory (KeyHandler)');
-
   // TODO: Phase 2 - delegate to content script with user activation
-  // For now, placeholder response
   sendResponse({
     success: false,
     error: 'Not implemented yet - Phase 2 feature'
   });
+}
+
+/**
+ * Relay log messages from offscreen document
+ */
+function handleLogRelay(action, payload, sender, sendResponse) {
+  const { args } = payload || {};
+  log('📡 [Offscreen]', ...(args || []));
+  sendResponse({ success: true });
 }
 
 // ============================================================================
@@ -204,5 +222,5 @@ log('🚀 Background service worker initialized');
 
 // Attempt to ensure offscreen on startup
 ensureOffscreen().catch(err => {
-  log('⚠️  Offscreen startup warning:', err.message);
+  log('⚠️ Offscreen startup warning:', err.message);
 });

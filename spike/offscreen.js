@@ -17,7 +17,7 @@ function log(...args) {
     // Relay to background, which will relay to content
     chrome.runtime.sendMessage({
       action: 'LOG_RELAY_FROM_OFFSCREEN',
-      args: args
+      payload: { args }
     }).catch(() => {});
   }
 }
@@ -39,14 +39,37 @@ class OffscreenHandler {
   handleMessage(msg, sender, sendResponse) {
     log('← Message:', msg.action || 'unknown');
 
-    if (msg.action === 'saveFile') {
-      this.saveFile(msg.filepath, msg.content)
-        .then(sendResponse)
-        .catch(e => sendResponse({ success: false, error: e.message }));
-      return true; // async
-    }
+    switch (msg.action) {
+      case 'saveFile': {
+        // Legacy path: expects { filepath, content }
+        this.saveFile(msg.filepath, msg.content)
+          .then(sendResponse)
+          .catch(e => sendResponse({ success: false, error: e.message }));
+        return true; // async
+      }
 
-    return false;
+      case 'ENSURE_DIRECTORY': {
+        this.ensureDirectory()
+          .then(sendResponse)
+          .catch(e => sendResponse({ success: false, error: e.message }));
+        return true; // async
+      }
+
+      default:
+        return false;
+    }
+  }
+
+  async ensureDirectory() {
+    const dir = await this.getDir();
+    if (!dir) {
+      // User cancelled or no directory available
+      return { success: false, cancelled: true };
+    }
+    return {
+      success: true,
+      dirName: dir.name
+    };
   }
 
   async saveFile(filepath, content) {
@@ -111,11 +134,9 @@ class OffscreenHandler {
   async notifyReady() {
     const maxRetries = 5;
     const retryDelay = 100;
-
     for (let i = 0; i < maxRetries; i++) {
       try {
         log(`📢 Sending OFFSCREEN_READY (attempt ${i + 1}/${maxRetries})`);
-        
         await new Promise((resolve, reject) => {
           chrome.runtime.sendMessage({ action: 'OFFSCREEN_READY' }, (response) => {
             if (chrome.runtime.lastError) {
@@ -125,7 +146,6 @@ class OffscreenHandler {
             }
           });
         });
-        
         log('✅ OFFSCREEN_READY sent successfully');
         return;
       } catch (e) {
