@@ -46,3 +46,13 @@ This repo is intentionally focused and separate from any monorepo so it can evol
 - Read `AGENTS.md` for agent-specific guidance and collaboration patterns
 - Read `ROADMAP.md` for current work, blockers, and next steps
 - Read `REFACTOR_PLAN.md` for detailed implementation specifications and architecture decisions
+
+## File markers for AI-assisted output
+
+Files may contain a first-line comment specifying the filepath. This is intentional and enables AI agents to route output directly to the correct file.
+
+Example:
+<!-- config.xml -->
+<text>asdas</text>
+
+See `AGENTS.md` for detailed conventions.

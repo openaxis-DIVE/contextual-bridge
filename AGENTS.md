@@ -41,3 +41,20 @@ Always reference these three files for project context:
 ## Agent-specific guidance
 
 For platform-specific directives and optimal usage patterns, see the platform-specific files listed above in "For AI agents reading this".
+
+## File markers for AI-assisted output
+
+When generating or editing files, include a filepath marker on the first line using the appropriate comment syntax for that file type:
+
+**Format:** `comment-open + filepath + optional description + comment-close (if single-line)`
+
+**Examples:**
+- Markdown: `# README.md (project overview)`
+- JavaScript: `// tests/AGENTS.md`
+- XML: `<!-- deployment/config.xml - Configuration for deployment -->`
+- Multi-line: 
+  /* REFACTOR_PLAN.md
+     Detailed implementation plan for keyboard-driven refactor
+  */
+
+The filename/path is essential; descriptive text after it is optional. This convention enables AI agents to route clipboard output directly to the correct file.
