@@ -18,6 +18,12 @@ This repo is intentionally focused and separate from any monorepo so it can evol
 - Not tightly coupled to the OpenAxis monorepo; it should remain usable on its own.
 - No heavy orchestration layer for agents; that belongs elsewhere.
 
+## Project phases
+
+- **Spike**: Experimental work in `spike/` directory
+- **Pre-production**: Validated, tested, ready for promotion
+- **Production**: Promoted to root-level project structure with standard layout
+
 ## Architecture sketch
 
 - **Browser extension (Chrome)**  
