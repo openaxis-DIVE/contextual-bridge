@@ -11,7 +11,7 @@
   "content_scripts": [
     {
       "matches": ["https://kagi.com/*"],
-      "js": ["bannerManager.js", "fileMarkerParser.js", "content.js"],
+      "js": ["bannerManager.js", "fileMarkerParser.js", "KeyHandler.js", "content.js"],
       "all_frames": true,
       "run_at": "document_end"
     }

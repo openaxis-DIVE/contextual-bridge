@@ -1,4 +1,4 @@
-// content.js - Content script for clipboard monitoring
+// spike/content.js - Content script with KeyHandler integration
 
 const DEBUG = true;
 
@@ -11,7 +11,7 @@ function log(...args) {
       second: '2-digit',
       fractionalSecondDigits: 3
     });
-    console.log(`[${timestamp}] [Kagi Saver Content]`, ...args);
+    console.log(`[${timestamp}] [Contextual Bridge]`, ...args);
   }
 }
 
@@ -22,8 +22,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+// ============================================================================
+// Component Initialization
+// ============================================================================
+
 const bannerManager = new BannerManager();
 const parser = new FileMarkerParser();
+
+// Initialize KeyHandler for keyboard-driven modal
+const keyHandler = new KeyHandler({
+  keymap: {
+    'Control+B': 'OPEN_MODAL'  // Bridge modal shortcut
+  },
+  debug: DEBUG,
+  focusOnly: true
+});
+
+log('🚀 Initializing Contextual Bridge');
+keyHandler.init();
+
+// ============================================================================
+// Legacy ClipboardWatcher (passive monitoring - can be deprecated Phase 2)
+// ============================================================================
 
 class ClipboardWatcher {
   constructor() {
@@ -32,10 +52,10 @@ class ClipboardWatcher {
   }
 
   init() {
-    log('🚀 Clipboard watcher initializing');
+    log('📋 Clipboard watcher initializing (legacy mode)');
     document.addEventListener('copy', this.onCopy.bind(this));
     document.addEventListener('mouseup', this.onMouseUp.bind(this));
-    bannerManager.show('🔖 Kagi Saver active', 3000);
+    bannerManager.show('🔖 Contextual Bridge active', 3000);
   }
 
   onCopy() {
@@ -108,9 +128,19 @@ class ClipboardWatcher {
   }
 }
 
+// ============================================================================
+// Lifecycle Management
+// ============================================================================
+
 // Initialize when DOM is ready
 if (document.body) {
   new ClipboardWatcher();
 } else {
   document.addEventListener('DOMContentLoaded', () => new ClipboardWatcher());
 }
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+  keyHandler.destroy();
+  log('🛑 Contextual Bridge cleaned up');
+});

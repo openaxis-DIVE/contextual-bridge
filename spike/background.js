@@ -1,4 +1,4 @@
-// background.js - Chrome extension background service worker
+// spike/background.js - Service Worker for background coordination
 
 const DEBUG = true;
 
@@ -11,145 +11,198 @@ function log(...args) {
       second: '2-digit',
       fractionalSecondDigits: 3
     });
-    const message = `[${timestamp}] [Kagi Saver BG] ${args.join(' ')}`;
-    console.log(message);
-    
-    // Relay to content script
-    chrome.tabs.query({ url: 'https://kagi.com/*' }, (tabs) => {
-      tabs.forEach(tab => {
-        chrome.tabs.sendMessage(tab.id, { 
-          action: 'LOG_RELAY', 
-          source: 'BG',
-          args: args 
-        }).catch(() => {}); // Ignore errors if content not ready
-      });
-    });
+    console.log(`[${timestamp}] [Background]`, ...args);
   }
 }
 
-class BackgroundController {
-  constructor() {
-    this.offscreenReady = false;
-    this.offscreenPath = 'offscreen.html';
-    this._resolveOffscreenReady = null;
-    this._offscreenPromise = null;
-    this.init();
+// Track offscreen document readiness
+let offscreenReady = false;
+let offscreenPath = 'offscreen.html';
+
+// ============================================================================
+// Offscreen Document Management
+// ============================================================================
+
+async function ensureOffscreen() {
+  if (offscreenReady) {
+    return;
   }
 
-  init() {
-    log('🚀 Background controller initializing');
-    chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
-  }
+  try {
+    // Check if offscreen document already exists
+    const offscreenUrl = chrome.runtime.getURL(offscreenPath);
+    const existingContexts = await chrome.runtime.getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT'],
+      documentUrls: [offscreenUrl]
+    });
 
-handleMessage(msg, sender, sendResponse) {
-  // Relay offscreen logs to content
-  if (msg.action === 'LOG_RELAY_FROM_OFFSCREEN') {
-    log(`← From Offscreen:`, ...msg.args);
-    return false;
-  }
-
-    // Offscreen announcing readiness
-    if (msg.action === 'OFFSCREEN_READY') {
-      this.onOffscreenReady();
-      return false;
-    }
-
-    // Content script sending save request
-    if (msg.action === 'saveFile' && sender.tab) {
-      this.handleSaveFile(msg, sendResponse);
-      return true; // async response
-    }
-
-    return false;
-  }
-
-  async handleSaveFile(msg, sendResponse) {
-    try {
-      await this.ensureOffscreen();
-      log('→ Sending to offscreen:', msg.action);
-      const response = await this.sendToOffscreen(msg);
-      log('→ Response to content:', response.success ? '✅' : '❌');
-      sendResponse(response);
-    } catch (e) {
-      log('💥 Save error:', e.message);
-      sendResponse({ success: false, error: e.message });
-    }
-  }
-
-  async ensureOffscreen() {
-    if (this.offscreenReady) {
-      log('✅ Offscreen already ready');
+    if (existingContexts.length > 0) {
+      offscreenReady = true;
+      log('✅ Offscreen document already exists');
       return;
     }
 
-    // If we're already waiting for offscreen to be ready, don't create it again
-    if (this._offscreenPromise) {
-      log('⏳ Waiting for existing offscreen...');
-      return this._offscreenPromise;
-    }
-
-    this._offscreenPromise = this._createOffscreen();
-    return this._offscreenPromise;
-  }
-
-  async _createOffscreen() {
-    try {
-      await chrome.offscreen.createDocument({
-        url: this.offscreenPath,
-        reasons: ['DOM_PARSER'],
-        justification: 'File System Access API'
-      });
-      log('✅ Offscreen document created, waiting for ready signal...');
-
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Offscreen readiness timeout'));
-        }, 5000);
-
-        this._resolveOffscreenReady = () => {
-          clearTimeout(timeout);
-          this.offscreenReady = true;
-          this._offscreenPromise = null;
-          resolve();
-        };
-      });
-    } catch (e) {
-      if (e.message.includes('Only a single offscreen')) {
-        log('✅ Offscreen already exists');
-        this.offscreenReady = true;
-        this._offscreenPromise = null;
-        return;
-      }
-
-      log('💥 Offscreen creation error:', e.message);
-      this._offscreenPromise = null;
-      throw e;
-    }
-  }
-
-  onOffscreenReady() {
-    log('✅ Offscreen reports ready');
-    if (this._resolveOffscreenReady) {
-      this._resolveOffscreenReady();
-    }
-  }
-
-  sendToOffscreen(msg) {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Offscreen response timeout'));
-      }, 10000);
-
-      chrome.runtime.sendMessage(msg, (response) => {
-        clearTimeout(timeout);
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(response || { success: false, error: 'No response' });
-        }
-      });
+    // Create offscreen document
+    await chrome.offscreen.createDocument({
+      url: offscreenPath,
+      reasons: ['FILE_SYSTEM_ACCESS']
     });
+
+    offscreenReady = true;
+    log('✅ Offscreen document created');
+  } catch (error) {
+    log('❌ Offscreen creation error:', error.message);
+    offscreenReady = false;
   }
 }
 
-const controller = new BackgroundController();
+// Listen for offscreen readiness signal
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'OFFSCREEN_READY') {
+    offscreenReady = true;
+    log('✅ Offscreen reported ready');
+    sendResponse({ success: true });
+  }
+});
+
+// ============================================================================
+// Message Routing (Phase 1 - KeyHandler Integration)
+// ============================================================================
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const { action, payload } = message;
+
+  log(`📨 Received: ${action}`, payload);
+
+  switch (action) {
+    // Legacy action (backward compatibility)
+    case 'saveFile':
+      handleSaveFile_Legacy(payload, sendResponse);
+      break;
+
+    // Phase 1: KeyHandler actions
+    case 'OPEN_MODAL':
+      handleOpenModal(sender, sendResponse);
+      break;
+
+    case 'CLOSE_MODAL':
+      handleCloseModal(sender, sendResponse);
+      break;
+
+    case 'SAVE_FILE':
+      handleSaveFile(payload, sender, sendResponse);
+      break;
+
+    case 'LOAD_FILE':
+      handleLoadFile(payload, sender, sendResponse);
+      break;
+
+    case 'PICK_DIRECTORY':
+      handlePickDirectory(payload, sender, sendResponse);
+      break;
+
+    default:
+      log('⚠️  Unknown action:', action);
+      sendResponse({ error: `Unknown action: ${action}` });
+  }
+
+  // Return true to indicate async response
+  return true;
+});
+
+// ============================================================================
+// Legacy Handler (backward compatibility with ClipboardWatcher)
+// ============================================================================
+
+function handleSaveFile_Legacy(payload, sendResponse) {
+  const { filepath, content } = payload;
+  const filename = filepath.split(/[\/\\]/).pop();
+
+  log(`💾 Save file (legacy): ${filename}`);
+
+  ensureOffscreen().then(() => {
+    chrome.runtime.sendMessage({
+      action: 'WRITE_FILE',
+      filepath,
+      content
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        log(`❌ Write error: ${chrome.runtime.lastError.message}`);
+        sendResponse({ success: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+
+      if (response?.success) {
+        log(`✅ Saved (legacy): ${filename}`);
+        sendResponse({ success: true });
+      } else {
+        log(`❌ Save failed (legacy): ${response?.error}`);
+        sendResponse({ success: false, error: response?.error });
+      }
+    });
+  });
+}
+
+// ============================================================================
+// Phase 1 Handlers (KeyHandler Integration)
+// ============================================================================
+
+function handleOpenModal(sender, sendResponse) {
+  log('🎯 Opening modal');
+  // TODO: Phase 1 continuation - implement modal state management
+  sendResponse({ success: true });
+}
+
+function handleCloseModal(sender, sendResponse) {
+  log('🎯 Closing modal');
+  // TODO: Phase 1 continuation - implement modal state management
+  sendResponse({ success: true });
+}
+
+function handleSaveFile(payload, sender, sendResponse) {
+  const { content } = payload;
+
+  log(`💾 Save file (KeyHandler): ${content.length} bytes`);
+
+  // TODO: Phase 1 continuation - extract filepath from content
+  // For now, placeholder response
+  sendResponse({
+    success: false,
+    error: 'Not implemented yet - waiting for Phase 1 DirectoryManager'
+  });
+}
+
+function handleLoadFile(payload, sender, sendResponse) {
+  const { selectedText } = payload;
+
+  log(`📂 Load file (KeyHandler): ${selectedText || 'no selection'}`);
+
+  // TODO: Phase 1 continuation - load from directory
+  // For now, placeholder response
+  sendResponse({
+    success: false,
+    error: 'Not implemented yet - waiting for Phase 1 DirectoryManager'
+  });
+}
+
+function handlePickDirectory(payload, sender, sendResponse) {
+  log('📁 Pick directory (KeyHandler)');
+
+  // TODO: Phase 2 - delegate to content script with user activation
+  // For now, placeholder response
+  sendResponse({
+    success: false,
+    error: 'Not implemented yet - Phase 2 feature'
+  });
+}
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+log('🚀 Background service worker initialized');
+
+// Attempt to ensure offscreen on startup
+ensureOffscreen().catch(err => {
+  log('⚠️  Offscreen startup warning:', err.message);
+});
