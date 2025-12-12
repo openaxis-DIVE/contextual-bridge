@@ -1,673 +1,423 @@
-# Contextual Bridge - Architecture Refactor Plan
+# Contextual Bridge - Refactor Status
 
-## Overview
-Refactoring from clipboard-watch pattern to keyboard-driven approach with explicit user control.
+## Phase 1: Complete ✅ (December 12, 2025)
 
-**Target:** Keyboard shortcut Ctrl+B opens modal, then S/L/D for save/load/pick operations
-**Constraint:** File System Access API requires user activation + proper serialization
-**Pattern:** Content script → Background coordinator → Offscreen file handler
+### Overview
+Refactored from clipboard-watch pattern to keyboard-driven architecture with explicit user control.
 
----
+**Achievement:** Keyboard shortcut Ctrl+B opens modal, then S/L/D/Esc for save/load/directory/exit operations.
 
-## Phase 1: Foundation - Keyboard + State Management
-
-### Phase 1 Deliverables
-- `KeyHandler.js` - Keyboard event capture (Ctrl+B for modal) & message dispatch
-- Bridge modal UI (shows S/L/D options when Ctrl+B pressed)
-- `background.js` - Refactored with DirectoryManager for state coordination
-- Updated architecture diagram & message contracts
-
-### Files to Create/Modify
-
-#### NEW: `KeyHandler.js` (~300 lines)
-
-**Purpose:** Centralize all keyboard event handling, dispatch validated messages to background
-
-**Class Structure:**
-```javascript
-class KeyHandler {
-  constructor(config = {})
-    // config: { keymap, debug }
-    // keymap: { 'Control+B': 'OPEN_MODAL' }
-    // Modal then listens for S/L/D keys
-
-  init()
-    // Attach keyboard listeners
-    // Only listen when document is focused (prevent background noise)
-
-  // Private handlers
-  onOpenModal()
-    // Ctrl+B pressed
-    // - Show Bridge modal overlay
-    // - Listen for S/L/D keypresses
-    // - Banner: "Bridge Mode: [S]ave | [L]oad | [D]irectory"
-
-  onSave()
-    // S pressed (inside modal)
-    // - Check clipboard has content
-    // - Send 'SAVE_FILE' to background with current clipboard
-    // - Banner feedback
-    // - Error handling via banner
-
-  onLoad()
-    // L pressed (inside modal)
-    // - Check for text selection (try to use as filepath)
-    // - If no selection, use lastFilepath from storage
-    // - If no lastFilepath, show banner error
-    // - Send 'LOAD_FILE' to background with filepath
-    // - Background will return content
-    // - Auto-copy content to clipboard
-    // - Banner: "Loaded: [filename]"
-
-  onPickDirectory()
-    // D pressed (inside modal)
-    // - Send 'PICK_DIRECTORY' to background
-    // - Background will show picker (user activation comes from keyboard event)
-    // - Banner confirms: "Directory selected: [name]"
-
-  // Utility
-  dispatchToBackground(action, payload)
-    // Standard message format: { action, payload, timestamp }
-    // Error handling: catch chrome.runtime.lastError, banner it
-
-  validateKeyboardEvent(e)
-    // Parse e.ctrlKey, e.key into standardized format
-    // Match against keymap
-    // Return { action, isValid }
-}
-```
-
-**Key Design Decisions:**
-- Single responsibility: capture → validate → dispatch (no business logic)
-- Keymap is configurable (easy to add/change shortcuts later)
-- All browser→background messages go through `dispatchToBackground()` (single contract point)
-- Banner management delegated to `BannerManager` (already exists)
-
-**Testing Hooks:**
-```javascript
-// Constructor accepts config, making it testable:
-const kh = new KeyHandler({
-  keymap: { 'Control+S': 'SAVE' },
-  debug: true
-});
-```
-
-**TODO for Future:**
-- [ ] Add key repeat debouncing (if user holds Ctrl+S)
-- [ ] Add customizable key bindings via settings
-- [ ] Add Bridge modal UI with visual feedback
-- [ ] Add modal keyboard listener for S/L/D keys
+**Architecture:** Content script → Background coordinator → Offscreen file handler
 
 ---
 
-#### REFACTORED: `background.js` (~400 lines)
+## Implementation Summary
 
-**Purpose:** Central coordinator for state + message routing
+### Completed Components
 
-**New Class Structure:**
+#### KeyHandler.js (~350 lines)
+**Purpose:** Centralize keyboard event handling, dispatch validated messages to background
 
-```javascript
-// DirectoryManager - Encapsulates directory handle state & operations
-class DirectoryManager {
-  constructor()
-    // this.dirHandle = null
-    // this.dirName = ''
-    // this.lastUpdated = null
+**Key Features:**
+- Captures Ctrl+B, S, L, D, Esc keys
+- Validates events (focused window only, no form elements)
+- Dispatches to background with standard message format
+- Handles responses (success/cancel/error flows)
+- Manages state: `listeningMode`, `currentDirName`
+- Shows banner feedback via BannerManager
 
-  async pickDirectory()
-    // Cannot be called from background directly (no user activation)
-    // Must be called from content script
-    // Returns: void (sets internal state)
-    // Messages back to content when done
-    
-    // NOTE: This is a design issue - see Phase 2 section below
-    // For now, expect this will be delegated to content via message
+**Response Handling:**
+- `onOpenModal()`: Sets listeningMode based on directory picker result
+- `onSave()`: Shows success/error banners with filename
+- `onPickDirectory()`: Updates banner with new directory name, keeps listening mode active
+- `onCloseModal()`: Exits listening mode
 
-  async verifyPermission()
-    // Check if stored dirHandle still has 'readwrite' permission
-    // Return: boolean
-    // If false, invalidate and request new pick
+#### background.js (~400 lines)
+**Purpose:** Central message router + state coordinator
 
-  async getHandle()
-    // Returns current dirHandle if valid
-    // Or null if invalid/not set
-    // Caller is responsible for requesting new pick
+**Key Features:**
+- Handler map pattern (no switch statements)
+- FileMarkerParser inlined for MV3 service worker compatibility
+- Routes: OPEN_MODAL, SAVE_FILE, LOAD_FILE, PICK_DIRECTORY, CLOSE_MODAL
+- Offscreen lifecycle management
+- Directory name persistence via chrome.storage.local
 
-  isReady()
-    // Quick check: do we have a valid dirHandle?
-    // Return: boolean
+**SAVE_FILE Flow:**
+1. Parse clipboard content using FileMarkerParser
+2. Return error if no filepath marker detected
+3. Call `ensureDirectoryViaOffscreen()`
+4. Forward to offscreen legacy `saveFile` handler
+5. Return `{success, filepath}` or error to KeyHandler
 
-  getMetadata()
-    // Return: { dirName, lastUpdated }
-    // For UI display/logging
+**Design Decision:** Inlined FileMarkerParser class instead of importScripts() due to MV3 service worker limitations.
 
-  // Event hooks for future expansion
-  onDirectoryChanged()
-    // Fire event that ClipboardManager/history tracking can listen to
-    // For now: just log + banner
-}
+#### offscreen.js (~180 lines)
+**Purpose:** File System Access API wrapper
 
-// BackgroundController - Message router + orchestrator
-class BackgroundController {
-  constructor()
-    // this.offscreenReady = false
-    // this.offscreenPath = 'offscreen.html'
-    // this._resolveOffscreenReady = null
-    // this._offscreenPromise = null
-    // this.dirManager = new DirectoryManager()
+**Key Features:**
+- Owns `dirHandle` (in-memory, not serializable)
+- `showDirectoryPicker()` on demand with permission validation
+- ENSURE_DIRECTORY action: returns `{success, dirName}` or `{cancelled: true}`
+- Legacy `saveFile` action: navigates path, saves file
+- **Safety:** Subdirectory navigation uses `{ create: false }` to block recursive path creation
 
-  init()
-    // chrome.runtime.onMessage.addListener()
+**Permission Handling:**
+- Caches dirHandle in-memory
+- Validates `readwrite` permission before use
+- Re-prompts picker if permission stale/revoked
 
-  handleMessage(msg, sender, sendResponse)
-    // Route based on msg.action:
-    // 'SAVE_FILE' → handleSave()
-    // 'LOAD_FILE' → handleLoad()
-    // 'PICK_DIRECTORY' → handlePickDirectory()
-    // 'OFFSCREEN_READY' → onOffscreenReady()
-    // 'LOG_RELAY_FROM_*' → pass through to content (existing)
+#### fileMarkerParser.js (~50 lines)
+**Purpose:** Extract filepath from clipboard text
 
-  async handleSave(msg, sendResponse)
-    // msg.filepath, msg.content expected
-    // Validate filepath exists
-    // Ensure offscreen ready
-    // Send to offscreen: { action: 'WRITE_FILE', filepath, content }
-    // On success: record lastFilepath in chrome.storage.local
-    // Fire dirManager.onDirectoryChanged() event
-    // sendResponse({ success, error })
+**Supported Formats:**
+- Comment style: `// path/to/file.js` or `# file.py`
+- JSON style: `{"$file": "path/to/file.json"}`
 
-  async handleLoad(msg, sendResponse)
-    // msg.filepath expected
-    // Ensure directory ready
-    // Send to offscreen: { action: 'READ_FILE', filepath }
-    // Offscreen returns { content, lastModified }
-    // Return to content
-    // Content will auto-copy to clipboard (Phase 2)
-    // sendResponse({ success, content, error })
+**Regex Fix:** Updated pattern to stop at delimiters (`-`, `//`, `#`, `*`)
+- Example: `// file.js - this is a comment` → extracts `file.js`
 
-  async handlePickDirectory(msg, sendResponse)
-    // Content script already has user activation (keyboard event)
-    // We just delegate back: "show picker in content script"
-    // msg should include tabId
-    // Response: { dirHandle } (but can't serialize, so metadata only)
-    // Actually: need to rethink this - see Phase 2 section
+**Validation:** Filepath must contain extension or path separator
 
-  async ensureOffscreen()
-    // Existing code (unchanged from current)
-    // Retry logic for offscreen readiness
+#### bannerManager.js (~100 lines)
+**Purpose:** Show temporary UI notifications
 
-  // Existing methods (keep as-is)
-  sendToOffscreen(msg)
-  onOffscreenReady()
-}
-```
+**Features:**
+- Singleton pattern: `window.BannerManager.show(msg, duration)`
+- 5-second default display
+- Fade animation
+- Injected into page DOM
 
-**Message Contracts (Define these clearly):**
+#### content.js (~150 lines)
+**Purpose:** Minimal orchestrator
 
-```
-KeyHandler → Background:
-{
-  action: 'SAVE_FILE',
-  payload: {
-    filepath: string,
-    content: string
-  },
-  timestamp: number
-}
-
-KeyHandler → Background:
-{
-  action: 'LOAD_FILE',
-  payload: {
-    filepath: string
-  },
-  timestamp: number
-}
-
-KeyHandler → Background:
-{
-  action: 'PICK_DIRECTORY',
-  payload: {},
-  timestamp: number
-}
-
-Background → Offscreen:
-{
-  action: 'WRITE_FILE',
-  filepath: string,
-  content: string
-}
-
-Offscreen → Background:
-{
-  success: boolean,
-  lastModified: timestamp,
-  error?: string
-}
-
-Background → Content (for load):
-{
-  success: boolean,
-  content: string,
-  lastModified: timestamp,
-  error?: string
-}
-```
-
-**Storage Schema (chrome.storage.local):**
-
-```javascript
-{
-  "contextual_bridge:lastFilepath": "/path/to/last/file.js",
-  "contextual_bridge:dirMetadata": {
-    "name": "Downloads",
-    "lastUpdated": 1702353600000
-  }
-  // Handle itself stays in-memory in DirectoryManager.dirHandle
-  // (Can't serialize to storage in MV3)
-}
-```
-
-**Design Notes:**
-- DirectoryManager encapsulates all dir-related state
-- BackgroundController routes messages
-- Explicit separation: "coordinator" doesn't know about files, just delegates
-- Future hooks: `onDirectoryChanged()` event for history tracking
-
-**Testing Hooks:**
-```javascript
-// Can instantiate separately:
-const dirMgr = new DirectoryManager();
-await dirMgr.verifyPermission();
-// Allows unit testing state logic
-```
-
-**TODO for Future:**
-- [ ] Implement file history tracking (listen to onDirectoryChanged)
-- [ ] Add chrome.storage.local for directory metadata persistence
-- [ ] Implement directory validation on extension load
-- [ ] Add retry logic if dir permissions revoked
+**Responsibilities:**
+- Initialize KeyHandler with debug mode
+- Relay logs from offscreen to console
+- Delegate all logic to KeyHandler
 
 ---
 
-### Phase 1 Architecture Diagram
+## Message Contracts (Implemented)
 
+### KeyHandler → Background
+
+**OPEN_MODAL**
+```javascript
+{ action: 'OPEN_MODAL', payload: {}, timestamp: 1702353600000 }
+// Response: { success: true, dirName: 'Downloads' }
+// Or: { success: false, cancelled: true, error: 'message' }
 ```
-┌─────────────────────────────────────────────────────┐
-│                    USER (Any webpage)                │
-│                                                      │
-│  Ctrl+B → Opens Bridge modal                        │
-│  Then: S (save) / L (load) / D (pick directory)    │
-└──────────────────────┬────────────────────────────────┘
-                       │
-┌──────────────────────▼─────────────────────────────────┐
-│            KeyHandler.js (Content Script)              │
-│  ┌─────────────────────────────────────────────┐      │
-│  │ - Capture keyboard events (focused only)    │      │
-│  │ - Validate against keymap                   │      │
-│  │ - Dispatch to background via sendMessage()  │      │
-│  │ - Show banner feedback                      │      │
-│  └─────────────────────────────────────────────┘      │
-└──────────────────────┬──────────────────────────────────┘
-                       │ chrome.runtime.sendMessage()
-┌──────────────────────▼──────────────────────────────────┐
-│      background.js (Service Worker)                     │
-│  ┌───────────────────────────────────────────┐         │
-│  │ BackgroundController                      │         │
-│  │ - Message router (SAVE_FILE, LOAD_FILE)   │         │
-│  │ - Orchestration (ensure offscreen ready)  │         │
-│  │ - State management via DirectoryManager   │         │
-│  └───────────────────┬───────────────────────┘         │
-│                      │                                  │
-│  ┌───────────────────▼───────────────────────┐         │
-│  │ DirectoryManager                          │         │
-│  │ - Store dirHandle (in-memory)             │         │
-│  │ - Verify permissions                      │         │
-│  │ - Fire events on state changes            │         │
-│  └───────────────────┬───────────────────────┘         │
-│                      │                                  │
-└──────────────────────┼────────────────────────────────────┘
-                       │ sendMessage()
-┌──────────────────────▼────────────────────────────────────┐
-│          offscreen.js (File I/O Handler)                  │
-│  - Receives WRITE_FILE, READ_FILE commands               │
-│  - Uses dirHandle to read/write files                    │
-│  - Returns success + metadata (lastModified)             │
-└──────────────────────────────────────────────────────────┘
+
+**SAVE_FILE**
+```javascript
+{ action: 'SAVE_FILE', payload: { content: '// file.js\nconsole.log("hi");' } }
+// Response: { success: true, filepath: 'file.js' }
+// Or: { success: false, error: 'Could not detect filepath marker' }
+```
+
+**PICK_DIRECTORY**
+```javascript
+{ action: 'PICK_DIRECTORY', payload: {}, timestamp: 1702353600000 }
+// Response: { success: true, dirName: 'NewFolder' }
+// Or: { success: false, cancelled: true }
+```
+
+### Background → Offscreen
+
+**ENSURE_DIRECTORY**
+```javascript
+{ action: 'ENSURE_DIRECTORY' }
+// Response: { success: true, dirName: 'Downloads' }
+// Or: { success: false, cancelled: true }
+```
+
+**saveFile (legacy)**
+```javascript
+{ action: 'saveFile', filepath: 'path/to/file.js', content: 'console.log("hi");' }
+// Response: { success: true }
+// Or: { success: false, error: 'Directory "path" does not exist...' }
 ```
 
 ---
 
-### Phase 1 Implementation Notes
+## Storage Schema (Implemented)
 
-**Known Issue - Design Debt:**
-The `PICK_DIRECTORY` message is problematic because:
-- Background service worker cannot call `showDirectoryPicker()` (no user activation)
-- Content script CAN (it has keyboard event)
-- But we're trying to centralize in background
+**chrome.storage.local:**
+```javascript
+{
+  "dirName": "Downloads"  // Persisted by OPEN_MODAL and PICK_DIRECTORY
+}
+```
 
-**Solution for Phase 2:**
-Either:
-1. **Option A:** Move picker logic to content script, have it store handle in `chrome.storage.local` (lossy, need to serialize differently)
-2. **Option B:** Have background relay "PICK_DIRECTORY" back to content script with user context
-3. **Option C:** Pre-pick directory on extension load, store in tab-specific state
-
-**Recommendation:** Option B - Keep architecture clean, have background ask content to do the picking. This maintains separation of concerns.
-
-**Will be addressed in Phase 2 section below.**
+**In-Memory State:**
+- `dirHandle` in offscreen.js (not serializable)
+- `listeningMode` in KeyHandler.js
+- `currentDirName` in KeyHandler.js (for banner display)
 
 ---
 
-### Architecture Philosophy: Site-Agnostic Design
+## Architecture Diagram (Current State)
 
-Contextual Bridge is intentionally designed to be **site-agnostic**, not tied to any specific platform. This architectural decision ensures long-term flexibility and reusability.
+```
+┌─────────────────────────────────────┐
+│        User (Any webpage)           │
+│  Ctrl+B → Opens Bridge modal        │
+│  S/L/D/Esc → Save/Load/Dir/Exit     │
+└─────────────┬───────────────────────┘
+              │
+┌─────────────▼───────────────────────┐
+│   KeyHandler.js (Content Script)    │
+│  - Capture keyboard events          │
+│  - Validate & dispatch              │
+│  - Handle responses                 │
+│  - Show banner feedback             │
+└─────────────┬───────────────────────┘
+              │ chrome.runtime.sendMessage()
+┌─────────────▼───────────────────────┐
+│   background.js (Service Worker)    │
+│  - Route messages (handler map)     │
+│  - Parse clipboard (FileMarker)     │
+│  - Coordinate offscreen             │
+│  - Persist dirName                  │
+└─────────────┬───────────────────────┘
+              │ chrome.runtime.sendMessage()
+┌─────────────▼───────────────────────┐
+│   offscreen.js (File I/O Handler)   │
+│  - Manage dirHandle (in-memory)     │
+│  - showDirectoryPicker()            │
+│  - Save files (no dir creation)     │
+│  - Validate permissions             │
+└─────────────────────────────────────┘
+```
 
-#### Generic Naming Convention
-All core components use generic, descriptive names that reflect their **function**, not their target site:
-- `KeyHandler` - Manages keyboard events (not "KagiKeyHandler")
-- `DirectoryManager` - Handles file system directories
-- `ClipboardManager` - Reads/writes clipboard content
+---
+
+## Design Decisions & Rationale
+
+### 1. Handler Map Pattern (vs Switch)
+**Decision:** Use object lookup for message routing in background.js
+
+**Rationale:**
+- Extensible (add handlers without touching router)
+- Testable (can inject/mock handlers)
+- Clean (no break statements)
+- Performance negligible for user-driven events
+
+See root `AGENTS.md` for detailed pattern comparison.
+
+### 2. Inlined FileMarkerParser
+**Decision:** Embed parser class directly in background.js
+
+**Problem:** `importScripts()` unreliable in MV3 service workers
+
+**Solution:** Copy class definition into background.js file
+
+**Trade-off:** DRY violation, but ensures reliability
+
+### 3. Blocked Directory Creation
+**Decision:** Use `{ create: false }` when navigating subdirectories
+
+**Rationale:**
+- Prevents accidental deep path creation from typos
+- Protects against path traversal issues
+- Forces explicit directory structure planning
+
+**User Impact:** Must manually create subdirectories before save
+
+### 4. Directory Handle In-Memory Only
+**Decision:** Don't serialize dirHandle to chrome.storage
+
+**Reason:** FileSystemDirectoryHandle not serializable in MV3
+
+**Solution:** Cache in-memory, revalidate permissions, re-prompt if needed
+
+**Stored:** Only `dirName` (string) for banner display
+
+### 5. Response-Driven State Management
+**Decision:** KeyHandler sets `listeningMode` based on background responses
+
+**Rationale:**
+- Single source of truth (background controls flow)
+- Handle cancel/error consistently
+- Allow recovery from all states
+
+### 6. Site-Agnostic Naming
+**Decision:** Generic component names (KeyHandler, not KagiKeyHandler)
+
+**Rationale:**
+- Future multi-site support
+- Clear separation of concerns
+- Easy to understand for new contributors
+
+---
+
+## Known Limitations (Phase 1)
+
+1. **LOAD_FILE not implemented** - Deferred to Phase 2
+2. **No clipboard safety warning** - Stale content detection planned for Phase 2
+3. **Subdirectories must exist** - By design (safety feature)
+4. **Single parser format** - Multi-parser support planned for Phase 3
+
+---
+
+## Testing Results (Phase 1)
+
+**Tested Scenarios:**
+- ✅ First-time use (Ctrl+B → directory picker → save)
+- ✅ User cancels picker (exits listening mode cleanly)
+- ✅ Save with valid filepath marker (success banner)
+- ✅ Save without filepath marker (error banner)
+- ✅ Save to subdirectory that doesn't exist (clear error)
+- ✅ Change directory with D key (updates banner, stays in listening mode)
+- ✅ Exit with Esc (closes modal, clears state)
+- ✅ FileMarkerParser regex (strips trailing comments)
+
+**Performance:**
+- No race conditions observed
+- Offscreen initialization reliable
+- Directory picker shows without delay
+- Banner transitions smooth
+
+---
+
+## Phase 2: Planned Features
+
+### LOAD_FILE Implementation
+**Goal:** Read file from disk → clipboard
+
+**Tasks:**
+- [ ] Add offscreen READ_FILE handler
+- [ ] Use selected text as filepath hint
+- [ ] Fallback to chrome.storage.local lastFilepath
+- [ ] Write content to clipboard
+- [ ] Update KeyHandler.onLoad() with response handling
+
+### Clipboard Safety Warning
+**Goal:** Prevent accidental saves of stale clipboard content
+
+**Tasks:**
+- [ ] Track copy events in KeyHandler (hasSeenCopyEvent flag)
+- [ ] Check chrome.storage.local for existing dirName on OPEN_MODAL
+- [ ] On first Ctrl+B with stale clipboard + no directory:
+  - Show: `⚠️ Prefilled clipboard. Set [D]irectory or [E]mpty clipboard`
+  - Don't trigger picker automatically
+- [ ] Add [E] key handler to clear clipboard
+
+### UX Polish
+- [ ] Enhanced error messages (suggest fixes)
+- [ ] Show last saved filepath in banner
+- [ ] File overwrite confirmation (optional)
+
+---
+
+## Phase 3+: Future Expansion
+
+### Multi-Site Support
+- Parser registration system (try multiple formats)
+- Site-specific configs via chrome.storage
+- MarkdownFileMarker, JSONFileMarker classes
+- Parser auto-detection
+
+### Advanced Features
+- File history tracking (listen to save events)
+- Settings page (keybinding customization)
+- Right-click context menu
+- Native messaging API support
+- PWA implementation (separate from extension)
+
+---
+
+## Architectural Philosophy
+
+### Site-Agnostic Design
+All core components use generic names reflecting **function**, not target site:
+- `KeyHandler` - Manages keyboard events
+- `DirectoryManager` (future) - Handles file system directories
+- `ClipboardManager` (future) - Reads/writes clipboard
 - `FileMarkerParser` - Parses file markers in text
 
-This naming makes the codebase immediately understandable and prevents lock-in to a single platform.
-
-#### Parser Extensibility
-The `FileMarkerParser` class is designed as one implementation of a **parser interface**. While Phase 1 focuses on the current file marker format (lines starting with `// 📁`), the architecture supports future parsers:
+### Parser Extensibility
+FileMarkerParser designed as one implementation of a parser interface:
 
 ```javascript
-// Current parser (Phase 1)
+// Current (Phase 1)
 class FileMarkerParser {
-  parse(text) {
-    // Extract filepath from: // 📁 /path/to/file.js
-    // Return: { filepath, content }
-  }
+  parse(text) { /* Extract from: // 📁 /path/to/file.js */ }
 }
 
-// Future parser examples (Phase 3+)
+// Future (Phase 3+)
 class MarkdownFileMarker {
-  parse(text) {
-    // Extract from: <!-- file: /path/to/file.md -->
-  }
+  parse(text) { /* Extract from: <!-- file: /path --> */ }
 }
 
-class JSONFileMarker {
-  parse(text) {
-    // Extract from JSON metadata block
-  }
-}
-
-// ClipboardManager accepts any parser
-const cm = new ClipboardManager(new MarkdownFileMarker());
-```
-
-#### Multi-Site Support Strategy
-The extension can support multiple sites/formats by:
-1. **Parser registration** - Register multiple parsers, try each in order
-2. **Site-specific configs** - Different keybindings per domain (via chrome.storage)
-3. **Parser auto-detection** - Analyze clipboard text format to select parser
-
-This design ensures that adding support for GitHub Gists, Notion, or other platforms requires only:
-- Implementing a new parser class (~50 lines)
-- No changes to core architecture (KeyHandler, DirectoryManager, etc.)
-
-#### Manifest Description
-The `manifest.json` reflects this philosophy:
-```json
-{
-  "name": "Contextual Bridge",
-  "description": "Site-agnostic file bridge for keyboard-driven save/load operations",
-  "version": "0.2.0"
+// Multi-parser support
+const parsers = [new FileMarkerParser(), new MarkdownFileMarker()];
+for (const parser of parsers) {
+  const result = parser.parse(text);
+  if (result) return result;
 }
 ```
 
-**Design Principle:** Build for one use case (current file markers), architect for many (any text-based file reference format).
+---
+
+## Implementation Notes
+
+### Chrome MV3 Constraints
+- Service workers cannot use `importScripts()` reliably
+- Cannot call `showDirectoryPicker()` from background (no user activation)
+- Directory handles not serializable (in-memory only)
+
+### File System Access API
+- Requires user activation (keyboard/mouse event)
+- Permissions must be revalidated on each session
+- Subdirectory navigation separate from file creation
+
+### Content Script Limitations
+- Cannot access File System Access API directly
+- Must communicate via background → offscreen
+- Banner UI injected into page DOM
 
 ---
 
-## Phase 2: Content Layer - Keyboard Handler + Clipboard Manager
+## Promotion Readiness
 
-### Phase 2 Deliverables
-- `ClipboardManager.js` - Read/write clipboard, resolve filepaths
-- `content.js` - Refactored orchestrator, delegates to KeyHandler + ClipboardManager
-- Updated message contracts for directory picking
+**Phase 1 Status:** Ready for pre-production review
 
-### Preview: `ClipboardManager.js` Structure
+**Checklist:**
+- ✅ Core save workflow functional
+- ✅ Error handling complete
+- ✅ Safety features in place
+- ✅ Documentation updated
+- ✅ No known race conditions
+- ✅ User can recover from all error states
 
-```javascript
-class ClipboardManager {
-  constructor(parser = null)
-    // parser: FileMarkerParser instance (or null to use default)
-    // Allows for future parsers (MarkdownFileMarker, etc.)
-
-  async readClipboard()
-    // navigator.clipboard.readText()
-    // Return: { text, timestamp }
-
-  async writeClipboard(content)
-    // navigator.clipboard.writeText(content)
-    // Banner: "Copied to clipboard"
-
-  parseFilepath(text)
-    // Use parser.parse(text) to extract filepath + content
-    // Return: { filepath, content } or null if invalid
-
-  resolveLoadFilepath(selection)
-    // If selection text is available, check if it's a valid filepath
-    // Otherwise, fallback to chrome.storage.local lastFilepath
-    // Return: filepath string or null
-
-  getLastFilepath()
-    // From chrome.storage.local
-}
-```
-
-### Preview: Phase 2 `content.js`
-
-```javascript
-// Initialize components
-const bannerManager = new BannerManager();
-const parser = new FileMarkerParser();
-const clipboardManager = new ClipboardManager(parser);
-const keyHandler = new KeyHandler({
-  keymap: {
-    'Control+B': 'OPEN_MODAL'
-  },
-  onAction: handleKeyAction // callback to handle actions
-  // Modal will handle S/L/D keys internally
-});
-
-async function handleKeyAction(action, context) {
-  switch(action) {
-    case 'OPEN_MODAL':
-      // Show Bridge modal with instructions
-      // Modal listens for S/L/D keypresses
-      // On keypress, route to appropriate handler
-      break;
-    case 'SAVE':
-      // Triggered by S key in modal
-      // clipboardManager.readClipboard()
-      // clipboardManager.parseFilepath()
-      // Send to background
-      break;
-    case 'LOAD':
-      // Triggered by L key in modal
-      // clipboardManager.resolveLoadFilepath()
-      // Send to background
-      // On response, clipboardManager.writeClipboard()
-      break;
-    case 'PICK_DIR':
-      // Triggered by D key in modal
-      // Ask user to pick directory
-      // Store in chrome.storage.local
-      // Send to background to validate
-      break;
-  }
-}
-```
-
-### Phase 2 Design Questions (to resolve in next session)
-
-1. **Parser Flexibility:**
-   - Should ClipboardManager accept multiple parsers?
-   - Or hardcode FileMarkerParser for now?
-   - Recommendation: Accept constructor param, default to FileMarkerParser
-
-2. **Directory Picking Delegation:**
-   - How should content script request a directory pick?
-   - Should it show a UI button/banner?
-   - Or just call `showDirectoryPicker()` directly on Ctrl+D?
-   - Recommendation: Direct call on Ctrl+D (cleaner flow)
-
-3. **Error Cascading:**
-   - If load fails (file not found), should we clear lastFilepath?
-   - Or keep it so user can retry with different directory?
-   - Recommendation: Keep it, let user manually pick new dir with Ctrl+D
+**Before Promotion:**
+- [ ] Complete Phase 2 (LOAD_FILE + safety warning)
+- [ ] Add JSDoc type hints for TypeScript prep
+- [ ] Create test suite (unit + integration)
+- [ ] Security review (permissions, data handling)
+- [ ] Performance profiling
 
 ---
 
-## Phase 3: File Operations - Offscreen Refactor
+## Session Handoff
 
-### Phase 3 Deliverables
-- `offscreen.js` - Simplified to read/write only, no picker logic
-- Message handler for WRITE_FILE + READ_FILE
+**For next coding session:**
+1. Reference this document for Phase 1 implementation details
+2. Start Phase 2 with LOAD_FILE in offscreen.js
+3. Update ROADMAP.md as features complete
+4. Keep message contracts in sync with code
 
-### Preview: Phase 3 `offscreen.js` Structure
+**Known Blockers:** None (Phase 1 complete)
 
-```javascript
-class OffscreenFileHandler {
-  constructor()
-    // this.dirHandle = null (received from background)
-
-  async handleMessage(msg)
-    // msg.action: 'WRITE_FILE' or 'READ_FILE'
-    // msg.filepath: string
-    // msg.content: string (for WRITE only)
-
-  async writeFile(filepath, content)
-    // Navigate through dirHandle to filepath
-    // Create directories as needed
-    // Write file
-    // Verify write via lastModified check
-    // Return: { success, lastModified, error }
-
-  async readFile(filepath)
-    // Navigate through dirHandle to filepath
-    // Read file content
-    // Get lastModified
-    // Return: { success, content, lastModified, error }
-
-  async getDirectoryHandle()
-    // Request dirHandle from background
-    // Store in-memory
-}
-```
-
-### Phase 3 Notes
-
-- No more `showDirectoryPicker()` in offscreen
-- No more retry logic for directory picking
-- Pure file I/O handler
-- Can add verification: compare file size before/after write
-
-**TODO for Future:**
-- [ ] Add file checksum verification (hash before/after)
-- [ ] Add support for nested directories creation
-- [ ] Add support for file metadata (permissions, timestamps)
+**Open Questions (Phase 2):**
+- Should [E] key clear clipboard with confirmation?
+- Load fallback: error or picker if no filepath?
+- File overwrite: ask every time or remember choice?
 
 ---
 
-## Testing Strategy
-
-### Phase 1 Testing
-```javascript
-// KeyHandler unit tests
-const kh = new KeyHandler({ keymap: { 'Control+S': 'SAVE' } });
-// Simulate keyboard event
-const evt = new KeyboardEvent('keydown', { ctrlKey: true, key: 'S' });
-// Check message dispatch
-
-// DirectoryManager unit tests
-const dm = new DirectoryManager();
-dm.isReady(); // → false
-// Mock dirHandle
-dm.dirHandle = mockHandle;
-dm.isReady(); // → true
-```
-
-### Phase 2 Testing
-```javascript
-// ClipboardManager unit tests
-const cm = new ClipboardManager(mockParser);
-await cm.readClipboard(); // → mock clipboard content
-cm.parseFilepath(text); // → { filepath, content }
-
-// Message flow tests
-Send SAVE_FILE message → Check Background coordination
-```
-
-### Phase 3 Testing
-```javascript
-// OffscreenFileHandler unit tests
-const ofh = new OffscreenFileHandler();
-ofh.dirHandle = mockDirHandle;
-await ofh.writeFile('test.js', 'content'); // → { success, lastModified }
-```
-
----
-
-## Future Expansion Hooks
-
-### Currently Planned
-- [ ] File history tracking (listen to DirectoryManager.onDirectoryChanged())
-- [ ] Directory persistence across extension reloads
-- [ ] Settings UI for keybinding customization
-- [ ] Right-click context menu for file operations
-
-### Architectural Readiness
-- **ClipboardManager:** Ready for multiple parsers (MarkdownFileMarker, JSONFileMarker, etc.)
-- **DirectoryManager:** Ready for file history event tracking
-- **KeyHandler:** Ready for customizable keybindings
-- **OffscreenFileHandler:** Ready for checksum verification
-
----
-
-## Dependencies & Permissions
-
-### Required (Already have)
-- `clipboardRead` - For Ctrl+L (load from clipboard)
-- `storage` - For chrome.storage.local (lastFilepath, dirMetadata)
-- `offscreen` - For file I/O
-- Manifest v3 - Service workers instead of background page
-
-### May Need (Phase 2+)
-- `clipboardWrite` - For auto-copy on load (check if needed)
-
----
-
-## Session Handoff Notes
-
-For next session resuming from this document:
-
-1. **Reference the Architecture Diagram** - Keep message contracts in sync
-2. **Test each phase independently** - Phase 1 before Phase 2
-3. **Update this document** as decisions change
-4. **Add implementation notes** to each section as you code
-5. **Keep TODOs up to date** - Mark completed items [x]
-
-### Known Blockers / Design Decisions Pending
-- [ ] Directory picker delegation (Phase 2) - Options A/B/C outlined above
-- [ ] Parser flexibility in ClipboardManager - Recommend constructor param
-- [ ] File verification strategy in OffscreenFileHandler - lastModified vs checksum
-
----
-
-## Summary Timeline
-
-| Phase | Files | LOC | Session | Notes |
-|-------|-------|-----|---------|-------|
-| 1 | KeyHandler.js, background.js | ~700 | This | Foundation - keyboard + coordination |
-| 2 | ClipboardManager.js, content.js | ~600 | Next | Integrate clipboard, resolve picker issue |
-| 3 | offscreen.js | ~250 | Next | Simplify to pure file I/O |
-
-**Total refactor:** ~1550 lines, 3 focused sessions
-**End state:** Clean keyboard-driven UI, testable components, future-proof architecture
+**Last Updated:** December 12, 2025  
+**Phase:** 1 Complete ✅, 2 Planned  
+**Contributors:** Human + AI agents  
+**Repository:** invite-only, not for public distribution
