@@ -81,6 +81,8 @@ const messageHandlers = {
   'SAVE_FILE': handleSaveFile,
   'LOAD_FILE': handleLoadFile,
   'PICK_DIRECTORY': handlePickDirectory,
+
+  // Offscreen logging
   'LOG_RELAY_FROM_OFFSCREEN': handleLogRelay
 };
 
@@ -106,13 +108,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Look up handler or use default
   const handler = messageHandlers[action] || handleUnknownAction;
-  
+
   // Call handler with correct signature (action, payload, sender, sendResponse)
   handler(action, payload, sender, sendResponse);
 
   // Return true to indicate async response
   return true;
 });
+
+// ============================================================================
+// Helper: Call offscreen ENSURE_DIRECTORY
+// ============================================================================
+
+async function ensureDirectoryViaOffscreen() {
+  await ensureOffscreen();
+
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      { action: 'ENSURE_DIRECTORY' },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          log('❌ ENSURE_DIRECTORY error:', chrome.runtime.lastError.message);
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(response || { success: false });
+      }
+    );
+  });
+}
 
 // ============================================================================
 // Handler Functions
@@ -151,11 +175,45 @@ function handleSaveFile_Legacy(action, payload, sender, sendResponse) {
 
 /**
  * Phase 1: Open modal
+ * - Ensure directory via offscreen
+ * - Persist dirName in chrome.storage.local
  */
 function handleOpenModal(action, payload, sender, sendResponse) {
   log('🎯 Opening modal');
-  // TODO: Phase 1 continuation - implement modal state management
-  sendResponse({ success: true });
+
+  ensureDirectoryViaOffscreen()
+    .then((result) => {
+      if (result.success && result.dirName) {
+        // Persist directory name for future sessions
+        chrome.storage.local.set({ dirName: result.dirName }, () => {
+          log('📁 Directory ready:', result.dirName);
+          sendResponse({
+            success: true,
+            dirName: result.dirName
+          });
+        });
+      } else if (result.cancelled) {
+        log('⚠️ User cancelled directory picker');
+        sendResponse({
+          success: false,
+          cancelled: true,
+          error: 'Directory picker cancelled'
+        });
+      } else {
+        log('❌ Failed to ensure directory:', result.error);
+        sendResponse({
+          success: false,
+          error: result.error || 'Failed to ensure directory'
+        });
+      }
+    })
+    .catch((err) => {
+      log('💥 ensureDirectoryViaOffscreen error:', err.message);
+      sendResponse({
+        success: false,
+        error: err.message
+      });
+    });
 }
 
 /**
@@ -169,11 +227,13 @@ function handleCloseModal(action, payload, sender, sendResponse) {
 
 /**
  * Phase 1: Save file from KeyHandler
+ * NOTE: Still placeholder - DirectoryManager not wired yet
  */
 function handleSaveFile(action, payload, sender, sendResponse) {
   const { content } = payload;
   log(`💾 Save file (KeyHandler): ${content.length} bytes`);
-  // TODO: Phase 1 continuation - extract filepath from content
+
+  // TODO: Phase 1 continuation - send to offscreen with parsed filepath
   sendResponse({
     success: false,
     error: 'Not implemented yet - waiting for Phase 1 DirectoryManager'
@@ -182,11 +242,13 @@ function handleSaveFile(action, payload, sender, sendResponse) {
 
 /**
  * Phase 1: Load file from KeyHandler
+ * NOTE: Still placeholder - DirectoryManager not wired yet
  */
 function handleLoadFile(action, payload, sender, sendResponse) {
   const { selectedText } = payload;
   log(`📂 Load file (KeyHandler): ${selectedText || 'no selection'}`);
-  // TODO: Phase 1 continuation - load from directory
+
+  // TODO: Phase 1 continuation - load from directory via offscreen
   sendResponse({
     success: false,
     error: 'Not implemented yet - waiting for Phase 1 DirectoryManager'
@@ -195,14 +257,44 @@ function handleLoadFile(action, payload, sender, sendResponse) {
 
 /**
  * Phase 1: Pick working directory
+ * - Force re-run of ENSURE_DIRECTORY via offscreen
  */
 function handlePickDirectory(action, payload, sender, sendResponse) {
   log('📁 Pick directory (KeyHandler)');
-  // TODO: Phase 2 - delegate to content script with user activation
-  sendResponse({
-    success: false,
-    error: 'Not implemented yet - Phase 2 feature'
-  });
+
+  // For now, just force a fresh ENSURE_DIRECTORY
+  ensureDirectoryViaOffscreen()
+    .then((result) => {
+      if (result.success && result.dirName) {
+        chrome.storage.local.set({ dirName: result.dirName }, () => {
+          log('📁 Directory re-selected:', result.dirName);
+          sendResponse({
+            success: true,
+            dirName: result.dirName
+          });
+        });
+      } else if (result.cancelled) {
+        log('⚠️ User cancelled directory picker (PICK_DIRECTORY)');
+        sendResponse({
+          success: false,
+          cancelled: true,
+          error: 'Directory picker cancelled'
+        });
+      } else {
+        log('❌ Failed to pick directory:', result.error);
+        sendResponse({
+          success: false,
+          error: result.error || 'Failed to pick directory'
+        });
+      }
+    })
+    .catch((err) => {
+      log('💥 ensureDirectoryViaOffscreen (PICK_DIRECTORY) error:', err.message);
+      sendResponse({
+        success: false,
+        error: err.message
+      });
+    });
 }
 
 /**
