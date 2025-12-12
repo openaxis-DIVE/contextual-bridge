@@ -28,6 +28,7 @@ class KeyHandler {
     this.isInitialized = false;
     this.windowFocused = true;
     this.listeningMode = false; // Track if we're listening for S/L/D/Escape
+    this.currentDirName = null; // Track current directory name for banner display
 
     // Bind all handlers so they can be removed later
     this.onKeyDown = this.onKeyDown.bind(this);
@@ -205,19 +206,40 @@ class KeyHandler {
 
   /**
    * Ctrl+B pressed - enter listening mode
+   * NOW IMPLEMENTED: Handles response from background
    */
   onOpenModal() {
     this.log('OPEN_MODAL triggered');
-    this.listeningMode = true;
 
     this.dispatchToBackground('OPEN_MODAL', {})
+      .then((response) => {
+        if (response.success && response.dirName) {
+          // Success: directory selected
+          this.listeningMode = true;
+          this.currentDirName = response.dirName;
+          this.showBanner(`Bridge: 📁 ${response.dirName} | [S]ave | [L]oad | [D]irectory | [Esc]ape`);
+          this.log('✅ Bridge mode active:', response.dirName);
+        } else if (response.cancelled) {
+          // User cancelled the picker
+          this.listeningMode = false;
+          this.currentDirName = null;
+          this.showBanner('Bridge cancelled (no directory selected)');
+          this.log('⚠️ Directory picker cancelled');
+        } else {
+          // Error occurred
+          this.listeningMode = false;
+          this.currentDirName = null;
+          const errorMsg = response.error || 'Unknown error';
+          this.showBanner(`Bridge error: ${errorMsg}`);
+          this.log('❌ Bridge error:', errorMsg);
+        }
+      })
       .catch((err) => {
-        this.showBanner('Failed to open modal');
+        this.listeningMode = false;
+        this.currentDirName = null;
+        this.showBanner('Failed to open bridge');
         this.log('OPEN_MODAL error:', err);
       });
-
-    // Show available actions
-    this.showBanner('Bridge Mode: [S]ave | [L]oad | [D]irectory | [Esc]ape');
   }
 
   /**
@@ -226,6 +248,7 @@ class KeyHandler {
   onCloseModal() {
     this.log('CLOSE_MODAL triggered');
     this.listeningMode = false;
+    this.currentDirName = null;
 
     this.dispatchToBackground('CLOSE_MODAL', {})
       .catch((err) => {
@@ -237,6 +260,7 @@ class KeyHandler {
 
   /**
    * S pressed (in listening mode) - save clipboard to file
+   * NOW IMPLEMENTED: Handles response from background
    */
   onSave() {
     this.log('SAVE triggered');
@@ -255,10 +279,32 @@ class KeyHandler {
           preview: content.substring(0, 50),
         });
 
+        // Send to background and handle response
         this.dispatchToBackground('SAVE_FILE', {
           content,
           timestamp: Date.now(),
-        });
+        })
+          .then((response) => {
+            if (response.success) {
+              // Success: show filename if available
+              const filename = response.filepath ? response.filepath.split(/[\/\\]/).pop() : 'file';
+              this.showBanner(`✅ Saved: ${filename}`);
+              this.log('✅ File saved successfully:', response.filepath);
+            } else if (response.cancelled) {
+              // User cancelled directory picker during save
+              this.showBanner('Save cancelled');
+              this.log('⚠️ Save cancelled by user');
+            } else {
+              // Error occurred
+              const errorMsg = response.error || 'Unknown error';
+              this.showBanner(`❌ Save failed: ${errorMsg}`);
+              this.log('❌ Save error:', errorMsg);
+            }
+          })
+          .catch((err) => {
+            this.showBanner('❌ Save failed: Communication error');
+            this.log('Save dispatch error:', err);
+          });
       })
       .catch((err) => {
         this.showBanner('Failed to read clipboard');
@@ -278,18 +324,54 @@ class KeyHandler {
     this.dispatchToBackground('LOAD_FILE', {
       selectedText: selection || null,
       timestamp: Date.now(),
-    });
+    })
+      .then((response) => {
+        if (response.success) {
+          this.showBanner('✅ Loaded to clipboard');
+          this.log('✅ File loaded successfully');
+        } else {
+          const errorMsg = response.error || 'Unknown error';
+          this.showBanner(`❌ Load failed: ${errorMsg}`);
+          this.log('❌ Load error:', errorMsg);
+        }
+      })
+      .catch((err) => {
+        this.showBanner('❌ Load failed');
+        this.log('Load dispatch error:', err);
+      });
   }
 
   /**
    * D pressed (in listening mode) - pick working directory
+   * NOW IMPLEMENTED: Handles response from background
    */
   onPickDirectory() {
     this.log('PICK_DIRECTORY triggered');
 
     this.dispatchToBackground('PICK_DIRECTORY', {
       timestamp: Date.now(),
-    });
+    })
+      .then((response) => {
+        if (response.success && response.dirName) {
+          // Success: update directory and keep listening mode active
+          this.currentDirName = response.dirName;
+          this.showBanner(`Bridge: 📁 ${response.dirName} | [S]ave | [L]oad | [D]irectory | [Esc]ape`);
+          this.log('✅ Directory changed:', response.dirName);
+        } else if (response.cancelled) {
+          // User cancelled - keep listening mode as-is
+          this.showBanner('Directory change cancelled');
+          this.log('⚠️ Directory picker cancelled');
+        } else {
+          // Error occurred - keep listening mode as-is
+          const errorMsg = response.error || 'Unknown error';
+          this.showBanner(`Directory change failed: ${errorMsg}`);
+          this.log('❌ Directory picker error:', errorMsg);
+        }
+      })
+      .catch((err) => {
+        this.showBanner('Failed to pick directory');
+        this.log('PICK_DIRECTORY error:', err);
+      });
   }
 
   /**
@@ -352,6 +434,7 @@ class KeyHandler {
     return {
       listeningMode: this.listeningMode,
       initialized: this.isInitialized,
+      currentDirName: this.currentDirName,
     };
   }
 

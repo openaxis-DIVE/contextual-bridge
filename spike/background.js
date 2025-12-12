@@ -15,6 +15,18 @@ function log(...args) {
   }
 }
 
+// Import FileMarkerParser for parsing clipboard content
+// Note: In Manifest V3 service workers, we need to use importScripts
+// This will be loaded from the same directory
+let FileMarkerParser;
+try {
+  importScripts('fileMarkerParser.js');
+  FileMarkerParser = self.FileMarkerParser || FileMarkerParser;
+  log('✅ FileMarkerParser loaded');
+} catch (e) {
+  log('⚠️ FileMarkerParser load warning:', e.message);
+}
+
 // Track offscreen document readiness
 let offscreenReady = false;
 let offscreenPath = 'offscreen.html';
@@ -51,7 +63,6 @@ async function ensureOffscreen() {
 
     offscreenReady = true;
     log('✅ Offscreen document created');
-
   } catch (error) {
     log('❌ Offscreen creation error:', error.message);
     offscreenReady = false;
@@ -122,7 +133,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function ensureDirectoryViaOffscreen() {
   await ensureOffscreen();
-
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
       { action: 'ENSURE_DIRECTORY' },
@@ -132,6 +142,7 @@ async function ensureDirectoryViaOffscreen() {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
+
         resolve(response || { success: false });
       }
     );
@@ -221,37 +232,116 @@ function handleOpenModal(action, payload, sender, sendResponse) {
  */
 function handleCloseModal(action, payload, sender, sendResponse) {
   log('🎯 Closing modal');
-  // TODO: Phase 1 continuation - implement modal state management
+  // Simple acknowledgment - KeyHandler manages listeningMode state
   sendResponse({ success: true });
 }
 
 /**
  * Phase 1: Save file from KeyHandler
- * NOTE: Still placeholder - DirectoryManager not wired yet
+ * NOW IMPLEMENTED: Parse content, ensure directory, forward to offscreen
  */
 function handleSaveFile(action, payload, sender, sendResponse) {
   const { content } = payload;
-  log(`💾 Save file (KeyHandler): ${content.length} bytes`);
+  log(`💾 Save file (KeyHandler): ${content?.length || 0} bytes`);
 
-  // TODO: Phase 1 continuation - send to offscreen with parsed filepath
-  sendResponse({
-    success: false,
-    error: 'Not implemented yet - waiting for Phase 1 DirectoryManager'
-  });
+  // Step 1: Parse content using FileMarkerParser
+  if (!FileMarkerParser) {
+    log('❌ FileMarkerParser not available');
+    sendResponse({
+      success: false,
+      error: 'FileMarkerParser not loaded'
+    });
+    return;
+  }
+
+  const parser = new FileMarkerParser();
+  const parsed = parser.parse(content);
+
+  if (!parsed || !parsed.filepath || !parsed.content) {
+    log('❌ Could not parse filepath marker from content');
+    sendResponse({
+      success: false,
+      error: 'Could not detect filepath marker in clipboard content'
+    });
+    return;
+  }
+
+  const { filepath, content: body } = parsed;
+  log(`📝 Parsed filepath: ${filepath}`);
+
+  // Step 2: Ensure directory via offscreen
+  ensureDirectoryViaOffscreen()
+    .then((dirResult) => {
+      if (!dirResult.success) {
+        if (dirResult.cancelled) {
+          log('⚠️ Directory picker cancelled during save');
+          sendResponse({
+            success: false,
+            cancelled: true,
+            error: 'Directory picker cancelled'
+          });
+        } else {
+          log('❌ Failed to ensure directory:', dirResult.error);
+          sendResponse({
+            success: false,
+            error: dirResult.error || 'Failed to ensure directory'
+          });
+        }
+        return;
+      }
+
+      // Step 3: Forward to offscreen saveFile handler (legacy action)
+      ensureOffscreen().then(() => {
+        chrome.runtime.sendMessage(
+          { action: 'saveFile', filepath, content: body },
+          (saveResponse) => {
+            if (chrome.runtime.lastError) {
+              log('❌ Offscreen saveFile error:', chrome.runtime.lastError.message);
+              sendResponse({
+                success: false,
+                error: chrome.runtime.lastError.message
+              });
+              return;
+            }
+
+            if (saveResponse?.success) {
+              log(`✅ File saved: ${filepath}`);
+              sendResponse({
+                success: true,
+                filepath
+              });
+            } else {
+              log(`❌ Save failed: ${saveResponse?.error}`);
+              sendResponse({
+                success: false,
+                error: saveResponse?.error || 'Unknown save error'
+              });
+            }
+          }
+        );
+      });
+    })
+    .catch((err) => {
+      log('💥 Save file error:', err.message);
+      sendResponse({
+        success: false,
+        error: err.message
+      });
+    });
 }
 
 /**
  * Phase 1: Load file from KeyHandler
- * NOTE: Still placeholder - DirectoryManager not wired yet
+ * NOTE: Still placeholder - deferred to Phase 2
  */
 function handleLoadFile(action, payload, sender, sendResponse) {
   const { selectedText } = payload;
   log(`📂 Load file (KeyHandler): ${selectedText || 'no selection'}`);
 
-  // TODO: Phase 1 continuation - load from directory via offscreen
+  // TODO: Phase 2 - implement LOAD_FILE via offscreen
   sendResponse({
     success: false,
-    error: 'Not implemented yet - waiting for Phase 1 DirectoryManager'
+    error: 'Not implemented yet - deferred to Phase 2'
   });
 }
 
@@ -262,7 +352,7 @@ function handleLoadFile(action, payload, sender, sendResponse) {
 function handlePickDirectory(action, payload, sender, sendResponse) {
   log('📁 Pick directory (KeyHandler)');
 
-  // For now, just force a fresh ENSURE_DIRECTORY
+  // Force a fresh ENSURE_DIRECTORY
   ensureDirectoryViaOffscreen()
     .then((result) => {
       if (result.success && result.dirName) {

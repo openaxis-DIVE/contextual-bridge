@@ -40,3 +40,8 @@ class FileMarkerParser {
     return /\.\w+$|[\/\\]/.test(path);
   }
 }
+
+// Export for use in background.js (service worker context)
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = FileMarkerParser;
+}
