@@ -1,10 +1,28 @@
 // bannerManager.js
 
+/**
+ * BannerManager - Display toast notifications with slide animations
+ *
+ * IMPORTANT: Creates a singleton instance and exports to window.BannerManager
+ * Must be loaded in manifest BEFORE KeyHandler
+ *
+ * Usage:
+ *   window.BannerManager.show('Hello!', 4000);
+ */
 class BannerManager {
+  /**
+   * Constructor
+   * Initializes banner state
+   */
   constructor() {
     this.currentBanner = null;
   }
 
+  /**
+   * Display a banner message
+   * @param {string} msg - Message to display
+   * @param {number} duration - How long to show in milliseconds (default: 4000)
+   */
   show(msg, duration = 4000) {
     // Remove existing banner
     if (this.currentBanner) {
@@ -76,5 +94,6 @@ class BannerManager {
     }, duration);
   }
 }
-// Make BannerManager available globally
+
+// Export singleton instance to window for use by content scripts
 window.BannerManager = new BannerManager();
