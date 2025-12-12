@@ -46,3 +46,9 @@
 2. Add keyboard shortcuts (Ctrl+Shift+K)
 3. Native messaging support
 4. PWA variant (reuse logic, different APIs)
+
+## Documentation rhythm
+
+- **End of coding session**: Move completed items from "Current Focus" to "Recently Completed" in ROADMAP.md
+- **After architectural decisions**: Add notes to REFACTOR_PLAN.md or PERP.md  
+- **When completing phases**: Update phase status in refactor documentation
