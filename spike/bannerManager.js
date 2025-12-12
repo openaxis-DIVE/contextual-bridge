@@ -76,3 +76,5 @@ class BannerManager {
     }, duration);
   }
 }
+// Make BannerManager available globally
+window.BannerManager = new BannerManager();

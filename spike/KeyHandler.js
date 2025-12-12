@@ -326,13 +326,11 @@ class KeyHandler {
    * @private
    */
   showBanner(message, type = 'info') {
-    if (window.BannerManager) {
-      window.BannerManager.show(message, type);
-    } else {
-      this.log(`[Banner-${type}] ${message}`);
-    }
+  if (window.BannerManager) {
+    window.BannerManager.show(message, 5000);  // Pass duration, not type
   }
-
+ this.log(`[Banner-${type}] ${message}`);
+}
   /**
    * Show error banner message
    * @private
