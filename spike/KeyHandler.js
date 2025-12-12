@@ -65,7 +65,7 @@ class KeyHandler {
     });
 
     // Show banner to user - let them know we're listening and what keys to use
-    this.showBanner('🔖 Bridge ready: Press Ctrl+B to open', 'info');
+    this.showBanner('🔖 Bridge ready: Press Ctrl+B to open');
   }
 
   /**
@@ -212,12 +212,12 @@ class KeyHandler {
 
     this.dispatchToBackground('OPEN_MODAL', {})
       .catch((err) => {
-        this.showBannerError('Failed to open modal');
+        this.showBanner('Failed to open modal');
         this.log('OPEN_MODAL error:', err);
       });
 
     // Show available actions
-    this.showBanner('Bridge Mode: [S]ave | [L]oad | [D]irectory | [Esc]ape', 'info');
+    this.showBanner('Bridge Mode: [S]ave | [L]oad | [D]irectory | [Esc]ape');
   }
 
   /**
@@ -232,7 +232,7 @@ class KeyHandler {
         this.log('CLOSE_MODAL error:', err);
       });
 
-    this.showBanner('Bridge mode closed', 'info');
+    this.showBanner('Bridge mode closed');
   }
 
   /**
@@ -246,7 +246,7 @@ class KeyHandler {
       .readText()
       .then((content) => {
         if (!content || content.trim().length === 0) {
-          this.showBannerError('Clipboard is empty');
+          this.showBanner('Clipboard is empty');
           return;
         }
 
@@ -261,7 +261,7 @@ class KeyHandler {
         });
       })
       .catch((err) => {
-        this.showBannerError('Failed to read clipboard');
+        this.showBanner('Failed to read clipboard');
         this.log('Clipboard read error:', err);
       });
   }
@@ -321,22 +321,17 @@ class KeyHandler {
   }
 
   /**
-   * Show info/success banner message
+   * Show banner message
    * Delegates to BannerManager if available
+   * @param {string} message - Message to display
    * @private
    */
-  showBanner(message, type = 'info') {
-  if (window.BannerManager) {
-    window.BannerManager.show(message, 5000);  // Pass duration, not type
-  }
- this.log(`[Banner-${type}] ${message}`);
-}
-  /**
-   * Show error banner message
-   * @private
-   */
-  showBannerError(message) {
-    this.showBanner(message, 'error');
+  showBanner(message) {
+    if (window.BannerManager) {
+      window.BannerManager.show(message, 5000);
+    } else {
+      this.log(`[Banner] ${message}`);
+    }
   }
 
   /**
