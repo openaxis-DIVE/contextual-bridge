@@ -38,7 +38,6 @@ class OffscreenHandler {
 
   handleMessage(msg, sender, sendResponse) {
     log('← Message:', msg.action || 'unknown');
-
     switch (msg.action) {
       case 'saveFile': {
         // Legacy path: expects { filepath, content }
@@ -66,6 +65,7 @@ class OffscreenHandler {
       // User cancelled or no directory available
       return { success: false, cancelled: true };
     }
+
     return {
       success: true,
       dirName: dir.name
@@ -84,8 +84,19 @@ class OffscreenHandler {
       const filename = parts.pop();
       let cwd = dir;
 
+      // Navigate to subdirectories WITHOUT creating them
+      // SAFETY: Block automatic directory creation to prevent recursive path issues
       for (const part of parts) {
-        cwd = await cwd.getDirectoryHandle(part, { create: true });
+        try {
+          cwd = await cwd.getDirectoryHandle(part, { create: false });
+        } catch (e) {
+          // Directory doesn't exist - return helpful error
+          log('❌ Directory does not exist:', part);
+          return {
+            success: false,
+            error: `Directory '${part}' does not exist. Please create it manually first.`
+          };
+        }
       }
 
       const fileHandle = await cwd.getFileHandle(filename, { create: true });
@@ -134,6 +145,7 @@ class OffscreenHandler {
   async notifyReady() {
     const maxRetries = 5;
     const retryDelay = 100;
+
     for (let i = 0; i < maxRetries; i++) {
       try {
         log(`📢 Sending OFFSCREEN_READY (attempt ${i + 1}/${maxRetries})`);

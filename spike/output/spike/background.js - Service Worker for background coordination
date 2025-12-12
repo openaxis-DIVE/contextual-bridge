@@ -1,5 +1,3 @@
-// spike/background.js - Service Worker for background coordination
-
 const DEBUG = true;
 
 function log(...args) {

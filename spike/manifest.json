@@ -17,6 +17,13 @@
     }
   ],
   "background": {
-    "service_worker": "background.js"
-  }
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["fileMarkerParser.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

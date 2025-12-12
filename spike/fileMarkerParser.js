@@ -1,10 +1,14 @@
-// fileMarkerParser.js
+// ============================================================================
+// FileMarkerParser - Inlined for service worker compatibility
+// ============================================================================
 
 class FileMarkerParser {
   constructor() {
     this.patterns = [
+      // JSON format: { "$file": "path/to/file.js" }
       { name: 'json', regex: /\{\s*"\$file"\s*:\s*"([^"]+)"/ },
-      { name: 'comment', regex: /^[\s\/\*\#\[\<\-'"`]*\s*(.+?)\s*$/ }
+      // Comment format: // path/to/file.js or # path/to/file.js etc.
+      { name: 'comment', regex: /^[\s\/\*\#\[\<\-'"`]*\s*([^\s]+(?:\s+[^\s]+)*?)(?:\s*[-\/#\*]|\s*$)/ }
     ];
   }
 
@@ -30,7 +34,9 @@ class FileMarkerParser {
     for (const pattern of this.patterns) {
       const match = line.match(pattern.regex);
       if (match?.[1]) {
-        return match[1];
+        // Clean up captured filepath - trim and remove trailing comment markers
+        const path = match[1].trim().replace(/[\s\-\/#\*]+$/, '');
+        return path;
       }
     }
     return null;
@@ -41,7 +47,4 @@ class FileMarkerParser {
   }
 }
 
-// Export for use in background.js (service worker context)
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = FileMarkerParser;
-}
+log('✅ FileMarkerParser loaded (inlined)');
